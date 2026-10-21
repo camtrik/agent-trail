@@ -390,7 +390,7 @@ type AggregateHookResult = ReturnType<typeof useAggregateSessions>
 type SessionTurnsHookResult = ReturnType<typeof useSessionTurns>
 
 describe('useAggregateSessions', () => {
-  it('fetches initial aggregate sessions through the five BFF source URLs', async () => {
+  it('fetches initial aggregate sessions through the six BFF source URLs', async () => {
     let latest: AggregateHookResult | undefined
 
     function Consumer() {
@@ -403,7 +403,7 @@ describe('useAggregateSessions', () => {
     await waitFor(() => expect(latest?.loading).toBe(false))
 
     const urls = fetchMock.mock.calls.map(([url]) => String(url))
-    expect(urls).toHaveLength(5)
+    expect(urls).toHaveLength(6)
     expect(urls).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/^\/api\/agent-tools\/openclaw\/sessions\?/),
@@ -463,7 +463,7 @@ describe('useAggregateSessions', () => {
 
     render(<AggregateConsumer />)
     await waitFor(() => expect(aggregateLatest?.loading).toBe(false))
-    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
 
     cleanup()
     fetchMock.mockClear()
@@ -624,6 +624,10 @@ describe('useAggregateSessions', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ sessions: [], pagination: { total: 0, limit: 2, offset: 0, hasMore: false } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({
           sessions: [
             sessionFixture('openclaw-new', 'openclaw', {
@@ -669,7 +673,7 @@ describe('useAggregateSessions', () => {
     await waitFor(() => expect(latest?.isLoadingMore).toBe(false))
 
     const urls = fetchMock.mock.calls.map(([url]) => String(url))
-    const nextPageUrls = urls.slice(5)
+    const nextPageUrls = urls.slice(6)
     expect(nextPageUrls).toHaveLength(2)
     expect(nextPageUrls).toEqual(
       expect.arrayContaining([

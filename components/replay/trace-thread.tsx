@@ -168,6 +168,9 @@ function TurnCard({
           <span className="v2-meta mono">
             {formatDuration(turn.durationMs)}{' '}
             {'\u00b7'} {formatTokens(tokenIn)}\u2191/{formatTokens(tokenOut)}\u2193
+            {turn.tokenUsage?.sourceCostUsd != null && <> {'\u00b7'} ${turn.tokenUsage.sourceCostUsd.toFixed(4)} recorded</>}
+            {(turn.tokenUsage?.cacheReadTokens ?? 0) > 0 && <> {'\u00b7'} cache read {formatTokens(turn.tokenUsage!.cacheReadTokens!)}</>}
+            {(turn.tokenUsage?.cacheWriteTokens ?? 0) > 0 && <> {'\u00b7'} cache write {formatTokens(turn.tokenUsage!.cacheWriteTokens!)}</>}
           </span>
         </header>
 
@@ -607,6 +610,12 @@ export function TraceThread({
           {inspectorOpen ? '\u00bb' : '\u00ab'}
         </button>
       </div>
+
+      {session?.source === 'commandcode' && (
+        <p className="px-4 py-2 text-sm text-muted-foreground" role="note">
+          Command Code history includes parent messages and agent prompts/results. Child conversation and tool traces were not recorded. Recorded costs cover parent model calls; agent results may contain additional token totals.
+        </p>
+      )}
 
       <div className="v2-cmd">
         <div className="v2-search">

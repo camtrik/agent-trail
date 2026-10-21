@@ -28,7 +28,7 @@ import {
 
 export const overviewRoutes = new Hono();
 
-const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as const;
+const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as const;
 
 const UPDATED_AT_EXPR =
   "CASE WHEN source = 'qoder' THEN MAX(COALESCE(ended_at, ''), COALESCE(started_at, '')) ELSE MAX(COALESCE(ended_at, ''), COALESCE(started_at, ''), COALESCE(file_mtime, '')) END";
