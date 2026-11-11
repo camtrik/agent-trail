@@ -13,6 +13,7 @@ import { assertSourceToolId } from '@/lib/agent-tools/registry'
 import { openclawAdapter } from '@/lib/agent-tools/openclaw/server-adapter'
 import { claudeCodeAdapter } from '@/lib/agent-tools/claude-code/server-adapter'
 import { codexAdapter } from '@/lib/agent-tools/codex/server-adapter'
+import { commandcodeAdapter } from '@/lib/agent-tools/commandcode/server-adapter'
 import { opencodeAdapter } from '@/lib/agent-tools/opencode/server-adapter'
 import { qoderAdapter } from '@/lib/agent-tools/qoder/server-adapter'
 import { allAdapter } from '@/lib/agent-tools/all/server-adapter'
@@ -24,6 +25,7 @@ const adapters: Record<string, AgentToolServerAdapter> = {
   openclaw: openclawAdapter,
   'claude-code': claudeCodeAdapter,
   codex: codexAdapter,
+  commandcode: commandcodeAdapter,
   opencode: opencodeAdapter,
   qoder: qoderAdapter,
 }

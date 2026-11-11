@@ -25,7 +25,16 @@ import type {
 export const searchRoutes = new Hono();
 
 const SESSION_ID_RE = /^[a-zA-Z0-9:\-_.]{1,256}$/;
-const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as const;
+const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as const;
+
+interface MessageSearchRow {
+  id: string;
+  ordinal: number;
+  role: string;
+  turn_index: number | null;
+  content: string | null;
+  snippet?: string | null;
+}
 
 interface GlobalSearchRow {
   id: string;
@@ -326,12 +335,12 @@ searchRoutes.get('/api/v1/sessions/:id/search', (c) => {
       JOIN messages m ON m.rowid = fts_messages_content.rowid
       WHERE fts_messages_content MATCH ? AND m.session_id = ?
       ORDER BY m.ordinal ASC
-    `).all(sanitizedQuery, sessionId);
+    `).all(sanitizedQuery, sessionId) as MessageSearchRow[];
 
     return c.json({
       sessionId,
       query,
-      results: results.map((r: any) => ({
+      results: results.map((r) => ({
         id: r.id,
         ordinal: r.ordinal,
         role: r.role,
@@ -345,12 +354,12 @@ searchRoutes.get('/api/v1/sessions/:id/search', (c) => {
       FROM messages
       WHERE session_id = ? AND content LIKE ?
       ORDER BY ordinal ASC
-    `).all(sessionId, `%${sanitizedQuery}%`);
+    `).all(sessionId, `%${sanitizedQuery}%`) as MessageSearchRow[];
 
     return c.json({
       sessionId,
       query,
-      results: likeResults.map((r: any) => ({
+      results: likeResults.map((r) => ({
         id: r.id,
         ordinal: r.ordinal,
         role: r.role,

@@ -41,14 +41,14 @@ function makeParseResultWithTools(
   toolCalls: Partial<TraceToolCall>[],
   messageCount = 2
 ): ParseResult {
-  const messages = Array.from({ length: messageCount }, (_, i) => ({
+  const messages: ParseResult['messages'] = Array.from({ length: messageCount }, (_, i) => ({
     id: `${sessionId}:${i}`,
     ordinal: i,
-    role: (i === 0 ? 'user' : 'assistant') as any,
+    role: i === 0 ? 'user' : 'assistant',
     content: i === 0 ? 'Run the command' : 'Running...',
     timestamp: `2024-01-01T00:0${i}:00Z`,
     sourceMetadata: {
-      sourceType: 'claude-code' as any,
+      sourceType: 'claude-code',
       sourceFile: '/fake/session.jsonl',
       sourceLine: i + 1,
     },
@@ -58,10 +58,10 @@ function makeParseResultWithTools(
     type: 'tool_call' as const,
     id: tc.id ?? `toolu_${i}`,
     name: tc.name ?? 'Bash',
-    category: (tc.category ?? 'Bash') as any,
+    category: tc.category ?? 'Bash',
     inputJson: tc.inputJson ?? '{}',
     resultEvents: tc.resultEvents ?? [],
-    status: (tc.status ?? 'success') as any,
+    status: tc.status ?? 'success',
     messageOrdinal: tc.messageOrdinal ?? 1,
     sourceLine: tc.sourceLine ?? 1,
   }));

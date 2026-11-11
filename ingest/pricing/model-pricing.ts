@@ -46,6 +46,7 @@ interface PricingRule {
   tiers: PricingTier[];
   cacheReadIncludedInInput?: boolean;
   reasoningBilledAsOutput?: boolean;
+  requestScoped?: boolean;
 }
 
 const PRICING_RULES: PricingRule[] = [
@@ -56,6 +57,19 @@ const PRICING_RULES: PricingRule[] = [
   openAi('gpt-5.4', [/^gpt-5\.4(?:$|[-_.])/], 2.5, 15, 0.25),
   openAi('gpt-5.3-codex', [/^gpt-5\.3-codex(?:$|[-_.])/], 1.75, 14, 0.175),
   openAi('chat-latest', [/^chat-latest$/], 5, 30, 0.5),
+
+  // https://platform.claude.com/docs/en/about-claude/pricing (2026-11-11)
+  // Cache writes use the standard five-minute rate.
+  anthropic('claude-opus-5.5', [/^claude-opus-5[-_.]?5(?:$|[-_.])/], 4, 20, 0.2, 5),
+  anthropic('claude-sonnet-5.5', [/^claude-sonnet-5[-_.]?5(?:$|[-_.])/], 2, 10, 0.1, 2.5),
+  {
+    ...anthropic('claude-haiku-5.5', [/^claude-haiku-5[-_.]?5(?:$|[-_.])/], 0.1, 0.5, 0.01, 0.125),
+    requestScoped: true,
+    tiers: [
+      { maxInputTokens: 100_000, inputPerMillion: 0.1, outputPerMillion: 0.5, cacheReadPerMillion: 0.01, cacheWritePerMillion: 0.125 },
+      { inputPerMillion: 0.5, outputPerMillion: 2.5, cacheReadPerMillion: 0.05, cacheWritePerMillion: 0.625 },
+    ],
+  },
 
   anthropic('claude-opus-4.7', [/^claude-opus-4[-_.]?7(?:$|[-_.])/], 5, 25, 0.5, 6.25),
   anthropic('claude-opus-4.6', [/^claude-opus-4[-_.]?6(?:$|[-_.])/], 5, 25, 0.5, 6.25),
@@ -186,6 +200,7 @@ function tier(
 export function estimateModelCost(
   model: string | null | undefined,
   usage: TokenUsageForPricing,
+  options?: { round?: boolean },
 ): ModelCostEstimate {
   // Provider-grouping guard: product-tier model keys from Qoder (and any source
   // using opaque product-tier identifiers) must never be attributed to a specific
@@ -201,7 +216,9 @@ export function estimateModelCost(
     return { cost: null, pricingStatus: 'unknown' };
   }
 
-  const selectedTier = selectTier(rule, usage.inputTokens);
+  const promptTokens = usage.inputTokens + (rule.cacheReadIncludedInInput === false
+    ? (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) : 0);
+  const selectedTier = selectTier(rule, promptTokens);
   const inputTokens = Math.max(
     usage.inputTokens - (rule.cacheReadIncludedInInput ? usage.cacheReadTokens ?? 0 : 0),
     0,
@@ -225,7 +242,7 @@ export function estimateModelCost(
     + (cacheWriteTokens / 1_000_000) * (selectedTier.cacheWritePerMillion ?? 0);
 
   return {
-    cost: roundCost(cost),
+    cost: options?.round === false ? cost : roundCost(cost),
     pricingStatus: 'priced',
     canonicalModel: rule.canonicalModel,
     provider: rule.provider,
@@ -244,6 +261,7 @@ export function rollUpCosts(estimates: ModelCostEstimate[]): CostRollup {
     }
 
     pricedCount += 1;
+    if (estimate.pricingStatus === 'partial') unknownCount += 1;
     cost += estimate.cost;
   }
 
@@ -257,6 +275,10 @@ export function rollUpCosts(estimates: ModelCostEstimate[]): CostRollup {
     pricedCount,
     unknownCount,
   };
+}
+
+export function requiresRequestUsage(model: string | null | undefined): boolean {
+  return findPricingRule(model)?.requestScoped === true;
 }
 
 function findPricingRule(model: string | null | undefined): PricingRule | null {

@@ -11,15 +11,15 @@ const mockStat = vi.fn();
 
 vi.mock('fs/promises', () => ({
   default: {
-    access: (...args: any[]) => mockAccess(...args),
-    readdir: (...args: any[]) => mockReaddir(...args),
-    readFile: (...args: any[]) => mockReadFile(...args),
-    stat: (...args: any[]) => mockStat(...args),
+    access: (...args: unknown[]) => mockAccess(...args),
+    readdir: (...args: unknown[]) => mockReaddir(...args),
+    readFile: (...args: unknown[]) => mockReadFile(...args),
+    stat: (...args: unknown[]) => mockStat(...args),
   },
-  access: (...args: any[]) => mockAccess(...args),
-  readdir: (...args: any[]) => mockReaddir(...args),
-  readFile: (...args: any[]) => mockReadFile(...args),
-  stat: (...args: any[]) => mockStat(...args),
+  access: (...args: unknown[]) => mockAccess(...args),
+  readdir: (...args: unknown[]) => mockReaddir(...args),
+  readFile: (...args: unknown[]) => mockReadFile(...args),
+  stat: (...args: unknown[]) => mockStat(...args),
 }));
 
 vi.mock('os', () => ({
@@ -215,7 +215,7 @@ describe('sync pipeline', () => {
       mockReaddir.mockResolvedValue(['claude-test.jsonl']);
 
       // Run sync
-      const result = await syncSource('claude-code' as any);
+      const result = await syncSource('claude-code');
 
       // Verify parseClaudeSession was called
       expect(parseClaudeSession).toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe('sync pipeline', () => {
       mockReaddir.mockResolvedValue(['codex-test.jsonl']);
 
       // Run sync
-      const result = await syncSource('codex' as any);
+      const result = await syncSource('codex');
 
       // Verify parseCodexSession was called
       expect(parseCodexSession).toHaveBeenCalled();
@@ -260,13 +260,13 @@ describe('sync pipeline', () => {
       const { parseClaudeSession } = await import('@/ingest/parser/claude');
 
       // Make parser throw for one file
-      (parseClaudeSession as any).mockRejectedValueOnce(new Error('Parse failed'));
+      vi.mocked(parseClaudeSession).mockRejectedValueOnce(new Error('Parse failed'));
 
       mockAccess.mockResolvedValue(undefined);
       mockReaddir.mockResolvedValue(['bad.jsonl', 'good.jsonl']);
 
       // This should not throw — errors should be captured in result.errors
-      const result = await syncSource('claude-code' as any);
+      const result = await syncSource('claude-code');
 
       // Should have at least one error logged
       expect(result.errors.length).toBeGreaterThanOrEqual(1);
@@ -280,7 +280,7 @@ describe('sync pipeline', () => {
       mockAccess.mockResolvedValue(undefined);
       mockReaddir.mockResolvedValue([]);
 
-      const result = await syncSource('claude-code' as any);
+      const result = await syncSource('claude-code');
 
       expect(result).toHaveProperty('toolCallsInserted');
       expect(result).toHaveProperty('toolResultEventsInserted');
@@ -297,7 +297,7 @@ describe('sync pipeline', () => {
       mockReaddir.mockResolvedValue([]);
 
       // Should accept SyncSourceOptions object with force=true
-      const result = await syncSource('claude-code' as any, { force: true });
+      const result = await syncSource('claude-code', { force: true });
 
       expect(result).toHaveProperty('errors');
       expect(Array.isArray(result.errors)).toBe(true);
@@ -310,7 +310,7 @@ describe('sync pipeline', () => {
       mockReaddir.mockResolvedValue([]);
 
       // Legacy string argument should still work
-      const result = await syncSource('openclaw' as any, '/some/path' as any);
+      const result = await syncSource('openclaw', '/some/path');
 
       expect(result).toHaveProperty('errors');
     });
@@ -329,15 +329,15 @@ describe('sync pipeline', () => {
             : 100,
       }));
 
-      const result = await syncSource('claude-code' as any, {
+      const result = await syncSource('claude-code', {
         limit: 2,
         sortByMtimeDesc: true,
       });
 
       expect(result).toHaveProperty('errors');
       expect(parseClaudeSession).toHaveBeenCalledTimes(2);
-      expect((parseClaudeSession as any).mock.calls[0][0]).toContain('new.jsonl');
-      expect((parseClaudeSession as any).mock.calls[1][0]).toContain('middle.jsonl');
+      expect(vi.mocked(parseClaudeSession).mock.calls[0][0]).toContain('new.jsonl');
+      expect(vi.mocked(parseClaudeSession).mock.calls[1][0]).toContain('middle.jsonl');
     });
 
     it('writeSessionToDatabase accepts WriteSessionOptions with force', async () => {

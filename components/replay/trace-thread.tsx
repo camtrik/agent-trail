@@ -140,6 +140,10 @@ function TurnCard({
   const userCopyText = parseUserMessage(userContent).userText
   const tokenIn = turn.tokenUsage?.inputTokens ?? 0
   const tokenOut = turn.tokenUsage?.outputTokens ?? 0
+  const recordedUsage = turn.userMessage?.sourceMetadata?.sourceType === 'commandcode'
+    || turn.assistantMessages.some(message => message.sourceMetadata?.sourceType === 'commandcode')
+  const cacheRead = turn.tokenUsage?.cacheReadTokens ?? 0
+  const cacheWrite = turn.tokenUsage?.cacheWriteTokens ?? 0
 
   const activityEntries: ActivityEntry[] = turn.activities.map((activity, idx) => ({ activity, idx }))
   const activitiesByOrdinal = groupActivityEntriesByOrdinal(activityEntries)
@@ -167,7 +171,10 @@ function TurnCard({
         <header className="v2-thead">
           <span className="v2-meta mono">
             {formatDuration(turn.durationMs)}{' '}
-            {'\u00b7'} {formatTokens(tokenIn)}\u2191/{formatTokens(tokenOut)}\u2193
+            {'\u00b7'} {formatTokens(tokenIn)}{'↑'}/{formatTokens(tokenOut)}{'↓'}
+            {recordedUsage && turn.tokenUsage?.sourceCostUsd != null && <> {'\u00b7'} ${turn.tokenUsage.sourceCostUsd.toFixed(4)} source estimate</>}
+            {recordedUsage && cacheRead > 0 && <> {'\u00b7'} cache read {formatTokens(cacheRead)} (included)</>}
+            {recordedUsage && cacheWrite > 0 && <> {'\u00b7'} cache write {formatTokens(cacheWrite)} (included)</>}
           </span>
         </header>
 
@@ -607,6 +614,12 @@ export function TraceThread({
           {inspectorOpen ? '\u00bb' : '\u00ab'}
         </button>
       </div>
+
+      {session?.source === 'commandcode' && (
+        <p className="px-4 py-2 text-sm text-muted-foreground" role="note">
+          Command Code history includes parent messages and agent prompts/results. Child conversation and tool traces were not recorded. Recorded costs cover parent model calls; agent results may contain additional token totals.
+        </p>
+      )}
 
       <div className="v2-cmd">
         <div className="v2-search">

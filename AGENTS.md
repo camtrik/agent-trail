@@ -2,16 +2,16 @@
 
 # agent-trail
 
-**Multi-source AI agent session tracing dashboard for OpenClaw, Claude Code, and Codex**
+**Multi-source AI agent session tracing dashboard for OpenClaw, Claude Code, Codex, OpenCode, Qoder, and Command Code**
 
-赛博朋克 HUD 风格的 multi-source AI agent session tracing dashboard。支持 OpenClaw、Claude Code、Codex 三个数据来源，提供 session browsing、turn replay 和 activity 追踪。
+赛博朋克 HUD 风格的 multi-source AI agent session tracing dashboard。支持 OpenClaw、Claude Code、Codex、OpenCode、Qoder、Command Code 六个数据来源，提供 session browsing、turn replay 和 activity 追踪。
 
 **Note**: This project was formerly known as OVAO (OpenClaw Visual Agents Office) during initial development.
 
 ## Commands
 
 ```bash
-pnpm dev      # 开发服务器 (http://localhost:3000)
+pnpm dev      # 开发服务器 (http://localhost:3029)
 pnpm build    # 生产构建
 pnpm start    # 启动生产服务器
 pnpm lint     # ESLint (eslint-config-next)
@@ -21,7 +21,7 @@ pnpm lint     # ESLint (eslint-config-next)
 
 ## Tech Stack
 
-- **Next.js 16.2.4** App Router + **React 19.2.4** + TypeScript
+- **Next.js 16.4.6** App Router + **React 19.3.1** + TypeScript
 - **Tailwind v4** —— CSS-first 配置，主题在 `app/globals.css` 的 `@theme inline` 中，**没有** `tailwind.config.js`
 - **shadcn/ui** —— `radix-nova` style, OKLCH 颜色, 基础色 `neutral`, lucide 图标（见 `components.json`）
 - **Zustand** 状态管理
@@ -29,7 +29,7 @@ pnpm lint     # ESLint (eslint-config-next)
 
 ## Architecture
 
-双服务架构：Next.js 前端（port 3000）+ Hono ingest 服务（port 8078），前端通过 BFF 代理访问 ingest，不直连。
+双服务架构：Next.js 前端（port 3029）+ Hono ingest 服务（port 8078），前端通过 BFF 代理访问 ingest，不直连。
 
 ```text
 app/
@@ -64,7 +64,7 @@ types/                  # 共享类型 (trace.ts 等)
 - **语言**：AI 文档/spec/plan 用**中文**；代码注释、变量名、commit message 用**英文**
 - **视觉令牌**：用语义化 token（`bg-background`, `text-foreground`, `border-border`），不要硬编码颜色值
 - **双主题**：light/dark 都要验证，WCAG AA 对比度
-- **Multi-source 架构**：支持 OpenClaw、Claude Code、Codex 三个数据来源，通过 source switcher 切换
+- **Multi-source 架构**：支持 OpenClaw、Claude Code、Codex、OpenCode、Qoder、Command Code 六个数据来源，通过 source switcher 切换
 - 遵从代码范式：实现相似功能时先看有没有已经存在的类似代码。并且参考。
 
 ## Environment

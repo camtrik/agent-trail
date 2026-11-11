@@ -26,11 +26,9 @@ import {
 } from '@/types/trace';
 import { ParseResult, ParseError } from './types';
 import { normalizeModelName } from '../pricing/normalize-model.js';
+import { inspectOpencodeSchema, listOpencodeSessions, openOpencodeReadonly, withOpencodeRetry } from './opencode-storage';
 
-const BUSY_RETRIES = 3;
-const BUSY_DELAY_MS = 100;
-const REQUIRED_TABLES = ['session', 'message', 'part', 'project'] as const;
-const OPENCODE_SKIP_KEY_VERSION = 'opencode-parser-v4-message-token-usage';
+const OPENCODE_SKIP_KEY_VERSION = 'opencode-parser-v5-v2-storage';
 type OpencodeTimestamp = string | number | null;
 
 interface TokenAccumulator {
@@ -81,86 +79,13 @@ interface OpencodeMessageRow {
 }
 
 interface OpencodePartRow {
+  type?: string;
   id: string;
   message_id: string;
   session_id: string;
   time_created: OpencodeTimestamp;
   time_updated: OpencodeTimestamp;
   data: string | null;
-}
-
-function openReadonly(dbPath: string): Database.Database {
-  let lastError: Error | undefined;
-  for (let attempt = 0; attempt <= BUSY_RETRIES; attempt++) {
-    try {
-      return new Database(dbPath, { readonly: true, fileMustExist: true });
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (isBusyError(err)) {
-        if (attempt < BUSY_RETRIES) {
-          sleepSync(BUSY_DELAY_MS);
-          continue;
-        }
-      }
-      throw new Error(
-        `Failed to open opencode database at ${dbPath}: ${lastError.message}`,
-      );
-    }
-  }
-  throw lastError!;
-}
-
-function withRetry<T>(db: Database.Database, fn: () => T): T {
-  let lastError: Error | undefined;
-  for (let attempt = 0; attempt <= BUSY_RETRIES; attempt++) {
-    try {
-      return fn();
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (isBusyError(err)) {
-        if (attempt < BUSY_RETRIES) {
-          sleepSync(BUSY_DELAY_MS);
-          continue;
-        }
-      }
-      throw lastError;
-    }
-  }
-  throw lastError!;
-}
-
-function isBusyError(err: unknown): boolean {
-  if (err instanceof Error) {
-    const code = (err as unknown as Record<string, unknown>).code;
-    return (
-      err.message?.includes('SQLITE_BUSY') ||
-      code === 'SQLITE_BUSY'
-    );
-  }
-  return false;
-}
-
-function sleepSync(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    // busy wait — acceptable for 100ms retry delays
-  }
-}
-
-function validateSchema(db: Database.Database): void {
-  const rows = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-    )
-    .all() as { name: string }[];
-  const existing = new Set(rows.map((r) => r.name));
-
-  const missing = REQUIRED_TABLES.filter((t) => !existing.has(t));
-  if (missing.length > 0) {
-    throw new Error(
-      `OpenCode DB schema validation failed: missing tables [${missing.join(', ')}]`,
-    );
-  }
 }
 
 function inferOpencodeToolCategory(name: string): ToolCategory {
@@ -198,7 +123,7 @@ function parseModelJson(modelStr: string | null): string | undefined {
 function parseJsonData(dataStr: string | null): Record<string, unknown> | null {
   if (!dataStr) return null;
   try {
-    return JSON.parse(dataStr) as Record<string, unknown>;
+    return asRecord(JSON.parse(dataStr)) ?? null;
   } catch {
     return null;
   }
@@ -396,13 +321,9 @@ export async function parseOpencodeSession(
   let db: Database.Database | undefined;
 
   try {
-    db = openReadonly(dbPath);
-
-    validateSchema(db);
-
-    const sessionRow = withRetry(db, () =>
-      db!.prepare('SELECT * FROM session WHERE id = ?').get(rawSessionId),
-    ) as OpencodeSessionRow | undefined;
+    db = openOpencodeReadonly(dbPath);
+    const schema = inspectOpencodeSchema(db);
+    const sessionRow = listOpencodeSessions(db, schema, rawSessionId).find(row => row.id === rawSessionId);
 
     if (!sessionRow) {
       return {
@@ -423,7 +344,7 @@ export async function parseOpencodeSession(
     let projectPath = projectOverride ?? sessionRow.directory ?? '';
 
     if (!projectOverride && sessionRow.project_id) {
-      const projectRow = withRetry(db, () =>
+      const projectRow = withOpencodeRetry(() =>
         db!.prepare('SELECT * FROM project WHERE id = ?').get(
           sessionRow.project_id,
         ),
@@ -434,21 +355,17 @@ export async function parseOpencodeSession(
       }
     }
 
-    const messageRows = withRetry(db, () =>
-      db!
-        .prepare(
-          'SELECT * FROM message WHERE session_id = ? ORDER BY time_created, id',
-        )
-        .all(rawSessionId),
-    ) as OpencodeMessageRow[];
-
-    const partRows = withRetry(db, () =>
-      db!
-        .prepare(
-          'SELECT * FROM part WHERE session_id = ? ORDER BY time_created, id',
-        )
-        .all(rawSessionId),
-    ) as OpencodePartRow[];
+    const isV2 = sessionRow.storage_layout === 'v2';
+    const messageRows = withOpencodeRetry(() => db!.prepare(
+      isV2
+        ? 'SELECT * FROM session_message WHERE session_id = ? ORDER BY seq, id'
+        : 'SELECT * FROM message WHERE session_id = ? ORDER BY time_created, id',
+    ).all(rawSessionId)) as (OpencodeMessageRow & { type?: string })[];
+    const partRows = withOpencodeRetry(() => !isV2
+      ? db!.prepare('SELECT * FROM part WHERE session_id = ? ORDER BY time_created, id').all(rawSessionId)
+      : schema.splitParts
+        ? db!.prepare("SELECT *, message_id || ':' || ordinal AS id FROM session_part WHERE session_id = ? ORDER BY message_id, ordinal").all(rawSessionId)
+        : []) as (OpencodePartRow & { type?: string })[];
 
     const partsByMessage = new Map<string, OpencodePartRow[]>();
     for (const part of partRows) {
@@ -458,9 +375,10 @@ export async function parseOpencodeSession(
     }
 
     const sessionId = `opencode:${sessionRow.id}`;
-    const model = parseModelJson(sessionRow.model);
+    let model = parseModelJson(sessionRow.model);
     let ordinal = 0;
     let currentTurnIndex = -1;
+    let v2TurnClosed = true;
     let currentTurnId: string | undefined;
     let startedAt: string | null = safeTimestamp(sessionRow.time_created);
     let endedAt: string | null = null;
@@ -475,23 +393,39 @@ export async function parseOpencodeSession(
 
     for (const msgRow of messageRows) {
       const msgData = parseJsonData(msgRow.data);
-      const role = msgData?.role ?? 'unknown';
+      if (!msgData) {
+        errors.push({ line: ordinal, raw: msgRow.id, error: 'Invalid OpenCode message JSON' });
+        continue;
+      }
+      const role = isV2 ? msgRow.type : msgData.role ?? 'unknown';
+      if (isV2 && msgData.model) model = parseModelJson(JSON.stringify(msgData.model)) ?? model;
 
       const ts = safeTimestamp(msgRow.time_created);
       if (ts) {
         if (!startedAt || ts < startedAt) startedAt = ts;
-        endedAt = ts;
+        if (!endedAt || ts > endedAt) endedAt = ts;
       }
 
-      if (role === 'user') {
+      if (role === 'user' && (!isV2 || v2TurnClosed)) {
         currentTurnIndex++;
         currentTurnId = `turn-${currentTurnIndex}`;
+        v2TurnClosed = false;
       }
+      // V2 idle markers close turns; steered prompts before idle remain in the same turn.
+      if (isV2 && role === 'idle') v2TurnClosed = true;
 
       const turnId = currentTurnId;
       const turnIndex = currentTurnIndex >= 0 ? currentTurnIndex : undefined;
 
-      const msgParts = partsByMessage.get(msgRow.id) ?? [];
+      const msgParts = [...(partsByMessage.get(msgRow.id) ?? [])];
+      if (isV2) {
+        const inline = Array.isArray(msgData.content) ? msgData.content : [];
+        const content = role === 'assistant' ? inline : [
+          ...(typeof msgData.text === 'string' ? [{ type: 'text', text: msgData.text }] : []),
+          ...(Array.isArray(msgData.files) ? msgData.files.map(file => ({ ...asRecord(file), type: 'file' })) : []),
+        ];
+        for (const [index, part] of content.entries()) msgParts.push({ ...msgRow, id: `${msgRow.id}:inline:${index}`, message_id: msgRow.id, type: undefined, data: JSON.stringify(part) });
+      }
       const textParts: string[] = [];
       const fileAttachments: string[] = [];
       const messageLevelTokenUsage = parseOpencodeTokenUsage(msgData);
@@ -508,7 +442,7 @@ export async function parseOpencodeSession(
           }
         }
 
-        const partType = partData.type as string | undefined;
+        const partType = partRow.type ?? partData.type as string | undefined;
         if (!partType) continue;
 
         switch (partType) {
@@ -533,10 +467,11 @@ export async function parseOpencodeSession(
             );
             const outputValue = state && 'output' in state
               ? state.output
-              : partData.output;
+              : state?.content != null ? opencodeContentText(state.content) : state?.error ?? partData.output;
             const output = stringifyValue(outputValue);
             const hasOutput = outputValue != null && output.length > 0;
             const resultTimestamp =
+              (isV2 ? safeTimestamp(asRecord(partData.time)?.completed as OpencodeTimestamp) : null) ??
               safeTimestamp(partRow.time_updated) ??
               safeTimestamp(partRow.time_created);
 
@@ -559,7 +494,7 @@ export async function parseOpencodeSession(
               inputJson: input,
               resultEvents,
               status: opencodeToolStatus(state?.status ?? partData.status, hasOutput),
-              durationMs: opencodeDurationMs(state),
+              durationMs: opencodeDurationMs(isV2 ? { time: { start: asRecord(partData.time)?.ran ?? asRecord(partData.time)?.created, end: asRecord(partData.time)?.completed } } : state),
               messageOrdinal: ordinal,
             };
 
@@ -648,7 +583,7 @@ export async function parseOpencodeSession(
             const fileName =
               typeof partData.name === 'string' ? partData.name : '';
             const filePath =
-              typeof partData.path === 'string' ? partData.path : fileName;
+              typeof partData.path === 'string' ? partData.path : fileName || (typeof partData.uri === 'string' ? partData.uri : '');
             if (filePath) {
               fileAttachments.push(`[Attachment: ${filePath}]`);
             }
@@ -661,6 +596,11 @@ export async function parseOpencodeSession(
             );
             break;
         }
+      }
+
+      if (isV2 && role !== 'user' && role !== 'assistant') {
+        activities.push({ type: 'system', subtype: msgRow.type ?? 'unknown', content: pickString(msgData, ['text', 'summary', 'description']) ?? JSON.stringify(msgData) } as TraceSystemEvent);
+        if (!textParts.length && typeof msgData.summary === 'string') textParts.push(msgData.summary);
       }
 
       let content = textParts.join('\n');
@@ -703,11 +643,13 @@ export async function parseOpencodeSession(
       ordinal++;
     }
 
-    const inputTokens = safeNumber(sessionRow.tokens_input) || messageTokenTotals.inputTokens;
-    const outputTokens = safeNumber(sessionRow.tokens_output) || messageTokenTotals.outputTokens;
-    const cacheReadTokens = safeNumber(sessionRow.tokens_cache_read) || messageTokenTotals.cacheReadTokens;
-    const cacheWriteTokens = safeNumber(sessionRow.tokens_cache_write) || messageTokenTotals.cacheWriteTokens;
-    const reasoningTokens = safeNumber(sessionRow.tokens_reasoning) || messageTokenTotals.reasoningTokens;
+    // V2 stores authoritative totals, including explicit zeros. Legacy exports may omit them.
+    const hasSessionUsage = isV2 || [sessionRow.tokens_input, sessionRow.tokens_output, sessionRow.tokens_cache_read, sessionRow.tokens_cache_write, sessionRow.tokens_reasoning].some(value => safeNumber(value) > 0);
+    const inputTokens = hasSessionUsage ? safeNumber(sessionRow.tokens_input) : messageTokenTotals.inputTokens;
+    const outputTokens = hasSessionUsage ? safeNumber(sessionRow.tokens_output) : messageTokenTotals.outputTokens;
+    const cacheReadTokens = hasSessionUsage ? safeNumber(sessionRow.tokens_cache_read) : messageTokenTotals.cacheReadTokens;
+    const cacheWriteTokens = hasSessionUsage ? safeNumber(sessionRow.tokens_cache_write) : messageTokenTotals.cacheWriteTokens;
+    const reasoningTokens = hasSessionUsage ? safeNumber(sessionRow.tokens_reasoning) : messageTokenTotals.reasoningTokens;
     const totalTokens =
       inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens + reasoningTokens;
     const sourceCostUsd = safeNullableNumber(sessionRow.cost);
@@ -721,10 +663,10 @@ export async function parseOpencodeSession(
       endedAt,
       updatedAt: safeTimestamp(sessionRow.time_updated) ?? undefined,
       status: sessionRow.time_archived ? 'idle' : endedAt ? 'idle' : 'active',
-      parentSessionId: sessionRow.parent_id
-        ? `opencode:${sessionRow.parent_id}`
+      parentSessionId: sessionRow.parent_id || sessionRow.fork_session_id
+        ? `opencode:${sessionRow.parent_id || sessionRow.fork_session_id}`
         : undefined,
-      relationshipType: sessionRow.parent_id ? 'subagent' : 'root',
+      relationshipType: sessionRow.parent_id ? 'subagent' : sessionRow.fork_session_id ? 'fork' : 'root',
       sourceSessionId: rawSessionId,
       cwd: sessionRow.directory ?? undefined,
       model,
@@ -743,7 +685,7 @@ export async function parseOpencodeSession(
         cacheReadTokens: cacheReadTokens || undefined,
         cacheWriteTokens: cacheWriteTokens || undefined,
         reasoningTokens: reasoningTokens || undefined,
-        totalTokens: totalTokens || undefined,
+        totalTokens: isV2 ? totalTokens : totalTokens || undefined,
         hasToolCalls,
         parserMalformedLines: errors.length,
         isTruncated: false,
@@ -800,7 +742,16 @@ export function computeOpencodeSkipKey(
   session: OpencodeSessionRow,
   messageCount: number,
   partCount: number,
+  storageFingerprint = '',
 ): string {
-  const composite = `${OPENCODE_SKIP_KEY_VERSION}:opencode:${session.id}:${session.time_updated}:${messageCount}:${partCount}`;
+  const composite = `${OPENCODE_SKIP_KEY_VERSION}:opencode:${session.id}:${session.time_updated}:${messageCount}:${partCount}:${storageFingerprint}`;
   return crypto.createHash('sha256').update(composite).digest('hex');
+}
+
+function opencodeContentText(value: unknown): string {
+  if (!Array.isArray(value)) return stringifyValue(value);
+  return value.map(item => {
+    const block = asRecord(item);
+    return block?.type === 'text' ? stringifyValue(block.text) : block?.type === 'file' ? `[Attachment: ${block.name ?? block.uri ?? ''}]` : stringifyValue(item);
+  }).join('\n');
 }

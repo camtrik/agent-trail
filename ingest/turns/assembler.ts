@@ -11,6 +11,7 @@
  * @module ingest/turns/assembler
  */
 
+import { decodeMessageUsage } from '../db/message-usage';
 import Database from 'better-sqlite3';
 import { getDatabase } from '../db';
 import {
@@ -402,6 +403,7 @@ interface SubagentLinkRow {
 // ============================================================================
 
 function parseMessageRow(row: MessageRow): TraceMessage {
+  const storedUsage = decodeMessageUsage(row.token_usage_json);
   return {
     id: row.id,
     ordinal: row.ordinal,
@@ -412,9 +414,8 @@ function parseMessageRow(row: MessageRow): TraceMessage {
     turnId: row.turn_id || undefined,
     turnIndex: row.turn_index ?? undefined,
     isRealUserInput: row.is_real_user_input === 1,
-    tokenUsage: row.token_usage_json
-      ? (JSON.parse(row.token_usage_json) as TokenUsage)
-      : undefined,
+    requestId: storedUsage.requestId,
+    tokenUsage: storedUsage.tokenUsage,
     sourceMetadata: {
       sourceType: row.source as TraceSource,
       sourceFile: row.source_file,
@@ -467,6 +468,7 @@ function combineTokenUsage(messages: Array<TraceMessage | null | undefined>): To
       };
     }
 
+    if (usage.sourceCostUsd !== undefined) combined.sourceCostUsd = (combined.sourceCostUsd ?? 0) + usage.sourceCostUsd;
     combined.inputTokens += usage.inputTokens;
     combined.outputTokens += usage.outputTokens;
     combined.cacheReadTokens = (combined.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0);

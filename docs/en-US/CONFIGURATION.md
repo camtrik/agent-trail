@@ -35,7 +35,7 @@ Source directories are managed centrally via `TOOL_DIR_REGISTRY` and `resolveToo
 - **Default:** `~/.openclaw/agents`.
 - **Config file key:** `openclaw_dirs` (array, supports multiple paths).
 - **Read at:** `ingest/config/tool-dirs.ts → TOOL_DIR_REGISTRY`.
-- **Resolves to:** `<dir>/<agent-name>/sessions/*.jsonl` (grouped by agent under each directory).
+- **Resolves to:** `<dir>/<agent-name>/agent/openclaw-agent.sqlite` plus legacy/exported archive JSONL under `sessions/`.
 - **Path containment:** Discovered paths are validated by `isWithinRoot` against the resolved root. Anything outside is dropped with `[sources] Rejected path outside root: ...` printed to the ingest log.
 
 ### `CLAUDE_PROJECTS_DIR`
@@ -56,10 +56,14 @@ Source directories are managed centrally via `TOOL_DIR_REGISTRY` and `resolveToo
 ### `OPENCODE_DB_PATH`
 
 - **Default:** `~/.local/share/opencode/opencode.db`.
-- **Config file key:** `opencode_db_path` (single path string).
+- **Config file key:** `opencode_db_paths` (array).
 - **Read at:** `ingest/config/tool-dirs.ts → TOOL_DIR_REGISTRY`.
 - **Resolves to:** OpenCode's SQLite database file (not a JSONL file directory). The parser opens this DB read-only, extracting data from `session`, `message`, `part`, and `project` tables.
 - **Note:** OpenCode stores session data in SQLite, not JSONL files. This path points to a single `.db` file.
+
+### `COMMANDCODE_PROJECTS_DIR`
+
+Defaults to `~/.commandcode/projects`; config key `commandcode_project_dirs` accepts an array. Only v3 historical transcripts and their title sidecars are imported; hook telemetry under `~/.commandcode/sessions` is not a transcript source. See [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ### `QODER_DB_PATH`
 
@@ -136,7 +140,7 @@ Set them in `.env.local` or via the launching shell; if the values are wrong, th
 | `INGEST_URL` | `http://localhost:8078` | `lib/agent-tools/server-adapter.ts` (`fetchIngest`); `app/api/agent-tools/[tool]/events/route.ts` | Base URL the BFF uses to talk to the ingest service. Server-side only. |
 | `NEXT_PUBLIC_API_BASE` | _(none — must be set if used)_ | `.env.local` only; **no current import** in source. Documented in `CLAUDE.md` as the expected HTTP API endpoint for older OpenClaw consumers. | Currently unused by code paths in the repo; kept for backwards-compat with the OVAO era. |
 | `NEXT_PUBLIC_GATEWAY_WS` | _(none — must be set if used)_ | `.env.local` only; **no current import** in source. Documented in `CLAUDE.md` as the OpenClaw Gateway WebSocket URL. | Currently unused by repo source. The GatewayBootstrap / WS client is not wired up in the active multi-source frontend; it remains in `.planning/` history. <!-- VERIFY: confirm whether NEXT_PUBLIC_GATEWAY_WS is required by any deployment surface beyond docs --> |
-| `PORT` | _(Next default — typically `3000`)_ | Next.js itself | Standard Next override (e.g. `PORT=3001 pnpm dev:next`). |
+| `PORT` | npm/Docker `3030`; source scripts explicitly use `3029` | CLI / Next.js | Use `pnpm exec next dev --webpack --port 3031` for another source dev port. |
 
 The empty `.env.local` shipped during local setup typically contains:
 

@@ -20,15 +20,18 @@ import {
   type CostRollup,
   type PricingStatus,
   type TokenUsageForPricing,
+  type ModelCostEstimate,
 } from '../pricing/model-pricing.js';
 import {
   getCanonicalModelKey,
   getDisplayModelName,
 } from '../pricing/normalize-model.js';
 
+import { getSessionUsageCosts } from '../pricing/session-pricing.js';
+
 export const overviewRoutes = new Hono();
 
-const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as const;
+const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as const;
 
 const UPDATED_AT_EXPR =
   "CASE WHEN source = 'qoder' THEN MAX(COALESCE(ended_at, ''), COALESCE(started_at, '')) ELSE MAX(COALESCE(ended_at, ''), COALESCE(started_at, ''), COALESCE(file_mtime, '')) END";
@@ -52,6 +55,7 @@ interface SessionCostRow extends TokenUsageForPricing {
   source: string;
   sourceCostUsd: number | null;
   costPricingStatus: string | null;
+  costEstimate?: ModelCostEstimate;
 }
 
 interface DailyTokenRow {
@@ -113,6 +117,7 @@ function getSessionCostRows(
   db: IngestDatabase,
   whereClause: string,
   params: SqlParam[],
+  byModel = false,
 ): SessionCostRow[] {
   const rows = db.prepare(`
     SELECT
@@ -157,7 +162,7 @@ function getSessionCostRows(
     cost_pricing_status: string | null;
   }>;
 
-  return rows.map((row) => ({
+  const mapped = rows.map((row) => ({
     id: row.id,
     source: row.source,
     project: row.project,
@@ -173,6 +178,7 @@ function getSessionCostRows(
     sourceCostUsd: row.source_cost_usd,
     costPricingStatus: row.cost_pricing_status,
   }));
+  return expandSessionCostRows(db, mapped, false, byModel);
 }
 
 function getDailyTokenCostRows(
@@ -180,7 +186,6 @@ function getDailyTokenCostRows(
   whereClause: string,
   params: SqlParam[],
 ): SessionCostRow[] {
-  const sessionTotalExpr = sessionTotalTokensExpr('s');
   const rows = db.prepare(`
     SELECT
       std.session_id AS id,
@@ -203,13 +208,7 @@ function getDailyTokenCostRows(
       COALESCE(std.cache_write_tokens, 0) AS cache_write_tokens,
       COALESCE(std.reasoning_tokens, 0) AS reasoning_tokens,
       COALESCE(std.total_tokens, 0) AS total_tokens,
-      CASE
-        WHEN s.source_cost_usd IS NOT NULL AND ${sessionTotalExpr} > 0
-          THEN s.source_cost_usd * COALESCE(std.total_tokens, 0) / ${sessionTotalExpr}
-        WHEN s.source_cost_usd IS NOT NULL
-          THEN s.source_cost_usd
-        ELSE NULL
-      END AS source_cost_usd,
+      s.source_cost_usd,
       CASE WHEN s.source_cost_usd IS NOT NULL THEN s.cost_pricing_status ELSE NULL END AS cost_pricing_status
     FROM session_token_daily std
     JOIN sessions s ON s.id = std.session_id
@@ -231,7 +230,7 @@ function getDailyTokenCostRows(
     cost_pricing_status: string | null;
   }>;
 
-  return rows.map((row) => ({
+  const mapped = rows.map((row) => ({
     id: row.id,
     source: row.source,
     project: row.project,
@@ -247,23 +246,54 @@ function getDailyTokenCostRows(
     sourceCostUsd: row.source_cost_usd,
     costPricingStatus: row.cost_pricing_status,
   }));
+  return expandSessionCostRows(db, mapped, true);
+}
+
+function expandSessionCostRows(
+  db: IngestDatabase,
+  rows: SessionCostRow[],
+  daily: boolean,
+  byModel = false,
+): SessionCostRow[] {
+  const costsBySession = new Map<string, ReturnType<typeof getSessionUsageCosts>>();
+  return rows.flatMap<SessionCostRow>((row) => {
+    let entries = costsBySession.get(row.id);
+    if (!entries) {
+      entries = getSessionUsageCosts(db, row.id, { reportedRequests: (daily || byModel) && row.sourceCostUsd != null });
+      costsBySession.set(row.id, entries);
+    }
+    if (row.sourceCostUsd != null && (!daily && (!byModel || entries[0]?.reportedModel))) {
+      return [{ ...row, model: byModel ? entries[0].reportedModel ?? null : entries[0]?.model ?? null,
+        costEstimate: { cost: row.sourceCostUsd,
+          pricingStatus: row.costPricingStatus === 'partial' ? 'partial' as const : 'priced' as const } }];
+    }
+    const selected = entries.filter((entry) => !daily || !entry.day || entry.day === row.day);
+    if (selected.length === 0) {
+      // All known requests belong to another day (for example repeated snapshots
+      // spanning midnight); do not bill the same request on both dates.
+      return [{ ...row, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+        costEstimate: { cost: 0, pricingStatus: 'priced' as const } }];
+    }
+    return selected.map((entry) => {
+      if (entry.aggregateFallback) {
+        return { ...row, model: entry.model, costEstimate: row.sourceCostUsd != null || entry.estimate.cost === null
+          ? entry.estimate : estimateModelCost(entry.model, row, { round: false }) };
+      }
+      const usage = entry.usage;
+      const knownZero = row.sourceCostUsd === 0 && row.costPricingStatus !== 'partial';
+      const estimate = daily && !entry.day && !knownZero ? { cost: null, pricingStatus: 'unknown' as const } : entry.estimate;
+      return { ...row, ...usage, model: entry.model,
+        totalTokens: entry.totalTokens ?? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens + usage.reasoningTokens,
+        costEstimate: estimate };
+    });
+  });
 }
 
 function rollUpSessionCosts(rows: SessionCostRow[]): CostRollup {
-  const estimates = rows
+  return rollUpCosts(rows
     .filter((row) => !(row.source === 'qoder' && row.relationshipType === 'subagent'))
-    .filter((row) => row.sourceCostUsd != null || row.totalTokens > 0)
-    .map((row) => {
-      const isReportedZero = row.costPricingStatus === 'reported_zero';
-      if (row.sourceCostUsd != null && !isReportedZero) {
-        return {
-          cost: row.sourceCostUsd,
-          pricingStatus: 'priced' as PricingStatus,
-        };
-      }
-      return estimateModelCost(row.model, row);
-    });
-  return rollUpCosts(estimates);
+    .filter((row) => row.sourceCostUsd != null || row.totalTokens > 0 || row.costEstimate != null)
+    .map((row) => row.costEstimate ?? { cost: null, pricingStatus: 'unknown' }));
 }
 
 function emptyDailyTokenRow(date: string): DailyTokenRow {
@@ -381,7 +411,9 @@ overviewRoutes.get('/api/v1/overview/aggregates', (c) => {
     total_tokens: number;
   };
 
-  const costSummary = rollUpSessionCosts(getDailyTokenCostRows(db, rollupWhereClause, rollupParams));
+  const costSummary = rollUpSessionCosts(window === 'all'
+    ? getSessionCostRows(db, whereClause, params)
+    : getDailyTokenCostRows(db, rollupWhereClause, rollupParams));
 
   return c.json({
     sessionCount: result.session_count,
@@ -590,65 +622,18 @@ overviewRoutes.get('/api/v1/overview/top-models', (c) => {
     ${whereClause}
   `).get(...params) as { total_tokens: number };
 
-  // Get per-model breakdown without duplicating session totals across messages.
-  // A session can contain many message rows, empty-string model placeholders, and
-  // synthetic control responses; choose the latest real model per session first,
-  // then aggregate session-level token totals by that canonical model.
-  const models = db.prepare(`
-    WITH filtered_sessions AS (
-      SELECT
-        s.id,
-        s.total_output_tokens,
-        s.total_input_tokens,
-        s.total_cache_read_tokens,
-        s.total_cache_write_tokens,
-        s.total_reasoning_tokens,
-        ${sessionTotalTokensExpr('s')} AS total_tokens
-      FROM sessions s
-      ${whereClause}
-    ),
-    modeled_sessions AS (
-      SELECT
-        fs.id AS session_id,
-        (
-          SELECT m.model
-          FROM messages m
-          WHERE m.session_id = fs.id
-            AND TRIM(COALESCE(m.model, '')) <> ''
-            AND m.model <> '<synthetic>'
-          ORDER BY m.ordinal DESC
-          LIMIT 1
-        ) AS model
-      FROM filtered_sessions fs
-    )
-    SELECT
-      ms.model AS name,
-      COUNT(*) AS session_count,
-      COALESCE(SUM(fs.total_output_tokens), 0) AS output_tokens,
-      COALESCE(SUM(fs.total_input_tokens), 0) AS input_tokens,
-      COALESCE(SUM(fs.total_cache_read_tokens), 0) AS cache_read_tokens,
-      COALESCE(SUM(fs.total_cache_write_tokens), 0) AS cache_write_tokens,
-      COALESCE(SUM(fs.total_reasoning_tokens), 0) AS reasoning_tokens,
-      COALESCE(SUM(fs.total_tokens), 0) AS total_tokens
-    FROM filtered_sessions fs
-    JOIN modeled_sessions ms ON ms.session_id = fs.id
-    WHERE ms.model IS NOT NULL
-    GROUP BY ms.model
-    ORDER BY total_tokens DESC
-  `).all(...params) as Array<{
-    name: string;
-    session_count: number;
-    output_tokens: number;
-    input_tokens: number;
-    cache_read_tokens: number;
-    cache_write_tokens: number;
-    reasoning_tokens: number;
-    total_tokens: number;
-  }>;
+  const costRows = getSessionCostRows(db, whereClause, params, true);
+  const models = costRows.filter((row) => row.model != null).map((row) => ({
+    name: row.model!, sessionId: row.id,
+    input_tokens: row.inputTokens, output_tokens: row.outputTokens,
+    cache_read_tokens: row.cacheReadTokens ?? 0, cache_write_tokens: row.cacheWriteTokens ?? 0,
+    reasoning_tokens: row.reasoningTokens ?? 0, total_tokens: row.totalTokens,
+  }));
 
   const mergedByCanonicalModel = new Map<string, {
     canonicalName: string;
     sessionCount: number;
+    sessionIds: Set<string>;
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
@@ -663,7 +648,7 @@ overviewRoutes.get('/api/v1/overview/top-models', (c) => {
 
     const existing = mergedByCanonicalModel.get(canonicalName);
     if (existing) {
-      existing.sessionCount += modelRow.session_count;
+      existing.sessionCount = existing.sessionIds.add(modelRow.sessionId).size;
       existing.inputTokens += modelRow.input_tokens;
       existing.outputTokens += modelRow.output_tokens;
       existing.cacheReadTokens += modelRow.cache_read_tokens;
@@ -675,7 +660,8 @@ overviewRoutes.get('/api/v1/overview/top-models', (c) => {
 
     mergedByCanonicalModel.set(canonicalName, {
       canonicalName,
-      sessionCount: modelRow.session_count,
+      sessionCount: 1,
+      sessionIds: new Set([modelRow.sessionId]),
       inputTokens: modelRow.input_tokens,
       outputTokens: modelRow.output_tokens,
       cacheReadTokens: modelRow.cache_read_tokens,
@@ -685,7 +671,6 @@ overviewRoutes.get('/api/v1/overview/top-models', (c) => {
     });
   }
 
-  const costRows = getSessionCostRows(db, whereClause, params).filter((row) => row.model != null);
   const costByCanonicalModel = new Map<string, CostRollup>();
   const canonicalCostModels = new Set(
     costRows

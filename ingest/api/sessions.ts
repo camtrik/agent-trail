@@ -10,12 +10,12 @@
 import { Hono } from 'hono';
 import { getDatabase } from '../db';
 import { TraceSession, SessionStatus, TraceSource } from '@/types/trace';
-import { estimateModelCost } from '../pricing/model-pricing.js';
+import { estimateSessionCost } from '../pricing/session-pricing.js';
 import { getDisplayModelName } from '../pricing/normalize-model.js';
 
 export const sessionsRoutes = new Hono();
 
-const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as const;
+const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as const;
 const VALID_SESSION_SORTS = [
   'updated_at',
   'started_at',
@@ -94,7 +94,7 @@ sessionsRoutes.get('/api/v1/sessions/lookup', (c) => {
   }
 
   // Validate source (whitelisted values only)
-  if (!['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'].includes(source)) {
+  if (!['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'].includes(source)) {
     return c.json({
       error: 'Invalid source parameter'
     }, 400);
@@ -484,27 +484,9 @@ function parseSessionRow(row: SessionRow): TraceSession {
     ? channelTotal
     : row.total_tokens || row.computed_total_tokens || channelTotal;
 
-  let estimatedCost: number | null;
-  let pricingStatus: string | undefined;
-
-  // reported_zero means the source reported $0 despite having token usage — treat as
-  // missing cost data and fall through to model-based estimation.
-  const isReportedZero = row.cost_pricing_status === 'reported_zero';
-
-  if (row.source_cost_usd != null && !isReportedZero) {
-    estimatedCost = row.source_cost_usd;
-    pricingStatus = 'priced';
-  } else {
-    const costEstimate = estimateModelCost(row.model, {
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheWriteTokens,
-      reasoningTokens,
-    });
-    estimatedCost = costEstimate.cost;
-    pricingStatus = costEstimate.pricingStatus;
-  }
+  const costEstimate = estimateSessionCost(getDatabase(), row.id);
+  const estimatedCost = costEstimate.cost;
+  const pricingStatus = costEstimate.pricingStatus;
 
   const summary = normalizeSummary(row.summary);
   const toolCalls = row.tool_call_count || 0;
@@ -567,8 +549,8 @@ function parseSessionRow(row: SessionRow): TraceSession {
     outputTokens,
     estimatedCost: estimatedCost,
     sourceCostUsd: row.source_cost_usd ?? undefined,
-    costSource: isReportedZero ? 'model-pricing-estimate' : (row.cost_source ?? undefined),
-    costPricingStatus: isReportedZero ? pricingStatus : (row.cost_pricing_status ?? pricingStatus),
+    costSource: row.source_cost_usd != null ? (row.cost_source ?? undefined) : 'model-pricing-estimate',
+    costPricingStatus: pricingStatus,
   };
 }
 

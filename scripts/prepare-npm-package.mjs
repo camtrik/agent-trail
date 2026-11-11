@@ -46,6 +46,11 @@ const sourcePkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"
 const versionOverride = process.argv[2];
 const version = versionOverride || sourcePkg.version;
 
+if (typeof sourcePkg.license !== "string" || !sourcePkg.license.trim()) {
+  die("source package.json must explicitly declare a license before packaging");
+}
+requireFile(join(repoRoot, "LICENSE"), "repository license text is required for packaging");
+
 if (!/^\d+\.\d+\.\d+(?:-[\w.+-]+)?$/.test(version)) {
   die(`invalid version "${version}" — expected semver`);
 }
@@ -158,7 +163,7 @@ const publishedPkg = {
     type: "git",
     url: "git+https://github.com/camtrik/agent-trail.git",
   },
-  license: sourcePkg.license || "MIT",
+  license: sourcePkg.license,
   author: sourcePkg.author || "camtrik",
   bin: {
     "agent-trail": "./bin/agent-trail.js",

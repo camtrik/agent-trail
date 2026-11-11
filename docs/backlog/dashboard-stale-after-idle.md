@@ -26,3 +26,7 @@ worktree:
 - [ ] 无明显抖动（短暂离开不应触发全量刷新，设置合理的 idle 阈值，如 >5 分钟）
 - [ ] Ingest 服务端检测死连接并逐出
 - [ ] 两端行为经过实际测试验证（Chrome tab 后台 >30 分钟后恢复）
+
+## Compatibility review evidence
+
+2026-11-11：隔离 Command Code 开发验证中观察到 BFF events 流在约 5 分钟后出现 UND_ERR_BODY_TIMEOUT，浏览器随后建立新的 200 SSE。该观察尚不能单独证明本项根因；后续长时间空闲/重连测试应覆盖上游 heartbeat、代理超时与重连后的数据刷新。

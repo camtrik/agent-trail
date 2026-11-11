@@ -59,3 +59,35 @@ describe('model pricing', () => {
     });
   });
 });
+
+
+describe('Claude 5.5 official pricing', () => {
+  it.each([
+    ['claude-opus-5.5', 4, 20, 0.2, 5],
+    ['anthropic/claude-opus-5-5-20261101', 4, 20, 0.2, 5],
+    ['claude-sonnet-5.5', 2, 10, 0.1, 2.5],
+    ['claude_sonnet_5_5', 2, 10, 0.1, 2.5],
+  ])('uses official token and five-minute cache rates for %s', (model, input, output, read, write) => {
+    expect(estimateModelCost(String(model), {
+      inputTokens: 1_000_000, outputTokens: 1_000_000,
+      cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000,
+    }).cost).toBe(Number(input) + Number(output) + Number(read) + Number(write));
+  });
+
+  it.each([
+    [99_999, 0, 0, 0.0105],
+    [100_000, 0, 0, 0.0105],
+    [100_001, 0, 0, 0.052501],
+    [10_000, 90_000, 0, 0.0024],
+    [10_000, 100_000, 0, 0.0125],
+    [10_000, 0, 90_001, 0.063751],
+  ])('selects Haiku tier from uncached=%s cacheRead=%s cacheWrite=%s', (inputTokens, cacheReadTokens, cacheWriteTokens, expected) => {
+    expect(estimateModelCost('claude-haiku-5-5', {
+      inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens: 1_000,
+    }).cost).toBe(expected);
+  });
+
+  it('propagates a known partial cost instead of making the rollup precise', () => {
+    expect(rollUpCosts([{ cost: 1, pricingStatus: 'partial' }])).toMatchObject({ cost: 1, pricingStatus: 'partial' });
+  });
+});

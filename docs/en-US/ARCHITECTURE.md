@@ -28,7 +28,7 @@ For end-to-end data movement (file → DB → UI), see [`DATA-FLOW.md`](DATA-FLO
 │   │   Health: /health, /version                                                                  │    │
 │   └───────────────────────────────────────────┬───────────────────────────────────────────────┘    │
 │                                               │ HTTP / SSE (only on localhost)                       │
-│   ┌───────────────────────────  Next.js frontend (port :3000) ───────────────────────────────┐     │
+│   ┌───────────────────────────  Next.js frontend (port :3029) ───────────────────────────────┐     │
 │   │                                                                                            │     │
 │   │   BFF proxy (D-07): app/api/agent-tools/[tool]/{health,sessions,sync,events,...}          │     │
 │   │     - validates [tool] (assertSourceToolId)                                                │     │
@@ -88,12 +88,15 @@ const adapters: Record<string, AgentToolServerAdapter> = {
   openclaw: openclawAdapter,
   'claude-code': claudeCodeAdapter,
   codex: codexAdapter,
+  opencode: opencodeAdapter,
+  qoder: qoderAdapter,
+  commandcode: commandcodeAdapter,
 }
 ```
 
 Adapters are pure dispatch — no `if (toolId === 'openclaw')` branches in route handlers. The only tool-conditional code in the BFF is the OpenClaw-only Gateway lookup at `/api/agent-tools/[tool]/sessions/lookup` (per D-10).
 
-The fourth scope, `all`, is a synthetic aggregate view — it is not an ingest source. `assertSourceToolId` rejects `all`; it's only accepted by the wider `assertAgentToolId` used by the shell layout.
+The aggregate scope, `all`, is a synthetic aggregate view — it is not an ingest source. `assertSourceToolId` rejects `all`; it's only accepted by the wider `assertAgentToolId` used by the shell layout.
 
 ### 3.3 Trust boundaries summarised
 
@@ -115,7 +118,7 @@ The fourth scope, `all`, is a synthetic aggregate view — it is not an ingest s
 Everything in the system speaks one shape, defined in [`types/trace.ts`](../types/trace.ts):
 
 ```text
-TraceSource           = 'openclaw' | 'claude-code' | 'codex' | 'opencode'
+TraceSource           = 'openclaw' | 'claude-code' | 'codex' | 'opencode' | 'qoder' | 'commandcode'
 TraceSession          { id, source, project, name?, startedAt, endedAt, status, metrics, ... }
 TraceTurn             { id, sessionId, index, userMessage, assistantMessages[], activities[], ... }
 TraceMessage          { id, ordinal, role, content, timestamp?, model?, tokenUsage?, sourceMetadata }
@@ -290,6 +293,6 @@ For decision history and rationale, see [`.planning/PROJECT.md`](../.planning/PR
 - **No multi-user, no auth, no RBAC.** Single-user local tool.
 - **No prompt playground, model-comparison, LLM-as-judge.** Out of v1 scope per `.planning/PROJECT.md`.
 - **No public share links, no upload.** Sessions can leak credentials and code.
-- **No agentsview-style universal-agent registry.** v1 ships only OpenClaw / Claude Code / Codex / OpenCode parsers; the schema leaves room to add more, but the registry is enumerated, not generic (D-21).
+- **No agentsview-style universal-agent registry.** Supported sources are enumerated in the registry; see [COMPATIBILITY.md](COMPATIBILITY.md) for formats and limits (D-21).
 
-When in doubt: **read-only, local-only, four sources**.
+When in doubt: **read-only, local-only, source-isolated**.

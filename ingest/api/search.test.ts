@@ -137,7 +137,7 @@ describe('search endpoint', () => {
       expect(body.results.length).toBeGreaterThanOrEqual(1);
 
       // Should find messages containing "authentication"
-      const contents = body.results.map((r: any) => r.snippet || '');
+      const contents = body.results.map((r: { snippet?: string }) => r.snippet || '');
       const hasMatch = contents.some((c: string) =>
         c.toLowerCase().includes('authentication')
       );
@@ -307,13 +307,13 @@ describe('search endpoint', () => {
       const body = await res.json();
 
       // Results should be ordered by ordinal
-      const ordinals = body.results.map((r: any) => r.ordinal);
+      const ordinals = body.results.map((r: { ordinal: number }) => r.ordinal);
       for (let i = 1; i < ordinals.length; i++) {
         expect(ordinals[i]).toBeGreaterThanOrEqual(ordinals[i - 1]);
       }
 
       // Turn indices should be present for messages that have them
-      const withTurnIndex = body.results.filter((r: any) => r.turnIndex !== null);
+      const withTurnIndex = body.results.filter((r: { turnIndex: number | null }) => r.turnIndex !== null);
       expect(withTurnIndex.length).toBeGreaterThanOrEqual(1);
     });
 

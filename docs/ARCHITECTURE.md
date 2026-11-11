@@ -28,7 +28,7 @@ agent-trail 是一个**双进程本地应用**：一个 Hono 摄取服务，监�
 │   │   Health: /health, /version                                                                  │    │
 │   └───────────────────────────────────────────┬───────────────────────────────────────────────┘    │
 │                                               │ HTTP / SSE (only on localhost)                       │
-│   ┌───────────────────────────  Next.js frontend (port :3000) ───────────────────────────────┐     │
+│   ┌───────────────────────────  Next.js frontend (port :3029) ───────────────────────────────┐     │
 │   │                                                                                            │     │
 │   │   BFF proxy (D-07): app/api/agent-tools/[tool]/{health,sessions,sync,events,...}          │     │
 │   │     - validates [tool] (assertSourceToolId)                                                │     │
@@ -81,7 +81,7 @@ BFF 为我们免费提供了四个属性：
 
 ### 3.2 按工具路由 (D-08)
 
-三个工具共享同一个 shell（`app/(tool-shell)/[tool]/`）和同一个 BFF 分发表：
+所有已注册来源共享同一个 shell（`app/(tool-shell)/[tool]/`）和同一个 BFF 分发表：
 
 ```ts
 const adapters: Record<string, AgentToolServerAdapter> = {
@@ -89,12 +89,15 @@ const adapters: Record<string, AgentToolServerAdapter> = {
   openclaw: openclawAdapter,
   'claude-code': claudeCodeAdapter,
   codex: codexAdapter,
+  opencode: opencodeAdapter,
+  qoder: qoderAdapter,
+  commandcode: commandcodeAdapter,
 }
 ```
 
 适配器是纯粹的分发器 — 路由处理器中没有 `if (toolId === 'openclaw')` 分支。BFF 中唯一按工具区分的代码是位于 `/api/agent-tools/[tool]/sessions/lookup` 的 OpenClaw 专属 Gateway 查找（依据 D-10）。
 
-第四个作用域 `all` 是合成的聚合视图。它有自己的 adapter（`allAdapter`），直接调 ingest API 不做 source 过滤，支持在 ALL 模式下查看任意 session 的详情、turns 和 messages。`assertSourceToolId` 仍拒绝 `all`；BFF route 在 `tool === 'all'` 时直接使用 `allAdapter` 而不经过 `assertSourceToolId`。
+聚合作用域 `all` 是合成的聚合视图。它有自己的 adapter（`allAdapter`），直接调 ingest API 不做 source 过滤，支持在 ALL 模式下查看任意 session 的详情、turns 和 messages。`assertSourceToolId` 仍拒绝 `all`；BFF route 在 `tool === 'all'` 时直接使用 `allAdapter` 而不经过 `assertSourceToolId`。
 
 ### 3.3 信任边界总结
 
@@ -103,7 +106,7 @@ const adapters: Record<string, AgentToolServerAdapter> = {
 | `[tool]` URL 段 (BFF) | `assertSourceToolId`（shell 使用 `assertAgentToolId`） | 未知工具返回 400 |
 | `sessionId` URL 段 (BFF) | `validateSessionId`（正则 `^[a-zA-Z0-9:\-_.]{1,256}$`） | 格式错误返回 400 |
 | `sessionId` URL 段 (摄取服务) | 独立应用相同的正则 | 格式错误返回 400 |
-| `?source=` (摄取服务) | 白名单 `['openclaw', 'claude-code', 'codex']` | 未知源返回 400 |
+| `?source=` (摄取服务) | 白名单 `['openclaw', 'claude-code', 'codex', 'opencode', 'qoder', 'commandcode']` | 未知源返回 400 |
 | `?role=` (摄取服务 `/messages`) | 白名单 `['user', 'assistant', 'system', 'tool_result']` | 错误 role 返回 400 |
 | `?sort=` / `?order=` (摄取服务) | 白名单 `updated_at` / `started_at` / `ended_at` × `asc` / `desc` | 错误排序返回 400 |
 | `limit` / `offset` | 非负整数；`limit` 上限 1000（摄取服务）/ 100 (BFF) | 负数返回 400 |
@@ -116,7 +119,7 @@ const adapters: Record<string, AgentToolServerAdapter> = {
 系统中的一切均使用同一数据结构，定义在 [`types/trace.ts`](../types/trace.ts) 中：
 
 ```text
-TraceSource           = 'openclaw' | 'claude-code' | 'codex'
+TraceSource           = 'openclaw' | 'claude-code' | 'codex' | 'opencode' | 'qoder' | 'commandcode'
 TraceSession          { id, source, project, name?, startedAt, endedAt, status, metrics, ... }
 TraceTurn             { id, sessionId, index, userMessage, assistantMessages[], activities[], ... }
 TraceMessage          { id, ordinal, role, content, timestamp?, model?, tokenUsage?, sourceMetadata }
@@ -291,6 +294,6 @@ useSessionTurns(toolId, sessionId, ...)
 - **没有多用户支持，没有认证，没有 RBAC。** 单用户本地工具。
 - **没有提示词试验场、模型比较、LLM 法官。** 根据 `.planning/PROJECT.md`，超出 v1 范围。
 - **没有公开分享链接，没有上传功能。** 会话可能泄露凭据和代码。
-- **没有 agentsview 风格的通用代理注册表。** v1 仅发布 OpenClaw / Claude Code / Codex 解析器；模式留有添加更多的空间，但注册表是枚举的，而非通用的 (D-21)。
+- **没有 agentsview 风格的通用代理注册表。** 支持范围由枚举注册表与各来源适配器决定，具体格式及限制见 [COMPATIBILITY.md](COMPATIBILITY.md) (D-21)。
 
-有疑问时以以下原则为准：**只读、仅本地、三个数据源**。
+有疑问时以以下原则为准：**只读、仅本地、来源隔离**。

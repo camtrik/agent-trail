@@ -160,3 +160,7 @@ When CI is added, prefer:
 - A single `vitest run` invocation (watch mode is for humans).
 - `pnpm typecheck` and `pnpm typecheck:ingest` together — they exercise different `tsconfig.json` files and catch cross-project drift.
 - `RUN_REAL_SESSION_TESTS` should remain off in CI; that suite is local-developer-only.
+
+## Pull request checks
+
+`.github/workflows/quality.yml` runs frozen-lockfile installation, lint, both typechecks, tests, and both service builds on Node 24 with pnpm 11.1.3. Generated packages, build output, worktrees and historical design drafts are excluded from lint; source errors remain enforced.

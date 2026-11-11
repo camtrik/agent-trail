@@ -17,7 +17,6 @@ import {
   TraceToolCall,
   TraceToolResultEvent,
   TraceThinkingBlock,
-  TraceSubagentLink,
   TraceActivity,
   ToolCategory,
   MessageRole,
@@ -82,7 +81,7 @@ function coerceTokenCount(value: unknown): number {
     : 0;
 }
 
-function normalizeClaudeTokenUsage(usage?: ClaudeUsageRecord): TokenUsage | undefined {
+function normalizeClaudeTokenUsage(usage?: ClaudeUsageRecord, requestId?: string): TokenUsage | undefined {
   if (!usage) return undefined;
 
   const inputTokens = coerceTokenCount(usage.input_tokens);
@@ -98,6 +97,7 @@ function normalizeClaudeTokenUsage(usage?: ClaudeUsageRecord): TokenUsage | unde
     cacheWriteTokens,
     totalTokens,
     usageSemantics: 'additive',
+    ...(requestId ? { requestId } : {}),
   };
 }
 
@@ -132,6 +132,13 @@ function addUsageToDelta(delta: IncrementalParseDelta, usage?: TokenUsage): void
       + (usage.cacheWriteTokens ?? 0)
       + (usage.reasoningTokens ?? 0));
 }
+
+/**
+ * Request snapshots Claude Code writes next to transcript lines. They repeat
+ * earlier turns (duplicating tool_use ids) and carry no uuid, so they must not
+ * become messages or tool calls.
+ */
+const SKIPPED_RECORD_TYPES = new Set(['api-request-blob', 'api-request']);
 
 // ============================================================================
 // Main Parser Entry Point
@@ -220,6 +227,7 @@ export async function parseClaudeSession(
 
     try {
       const parsed: ClaudeJsonlLine = JSON.parse(line);
+      if (SKIPPED_RECORD_TYPES.has(parsed.type)) continue;
 
       if (typeof parsed.cwd === 'string' && parsed.cwd.trim()) {
         sessionCwd = parsed.cwd;
@@ -260,12 +268,12 @@ export async function parseClaudeSession(
       // Real Claude logs emit isCompactSummary: true (not just type: "compact")
       const isCompact =
         parsed.type === 'compact' ||
-        (parsed as any).isCompactSummary === true;
+        parsed.isCompactSummary === true;
       if (isCompact) {
         // Prefer compact.truncatedUuids; fall back to top-level truncatedUuids array
         const truncatedUuids: string[] =
-          (parsed as any).compact?.truncatedUuids ||
-          (parsed as any).truncatedUuids ||
+          parsed.compact?.truncatedUuids ||
+          parsed.truncatedUuids ||
           [];
         compactBoundaries.push({
           lineNumber: lineNum,
@@ -286,7 +294,7 @@ export async function parseClaudeSession(
             sourceType: 'claude-code',
             sourceFile: context.filePath,
             sourceLine: lineNum,
-            sourceVersion: (context as any).sourceVersion || 'unknown',
+            sourceVersion: context.sourceVersion || 'unknown',
             cwd: sessionCwd,
             gitBranch: sessionGitBranch,
           },
@@ -384,7 +392,7 @@ export async function parseClaudeSession(
       // tool_result-only user records should NOT become full user turn messages —
       // instead, pair the results with the matching tool calls.
       if (role === 'user' && Array.isArray(parsed.message.content)) {
-        const blocks = parsed.message.content as any[];
+        const blocks = parsed.message.content;
         const toolResultBlocks = blocks.filter(b => b.type === 'tool_result');
         const nonToolResultBlocks = blocks.filter(b => b.type !== 'tool_result');
 
@@ -397,7 +405,7 @@ export async function parseClaudeSession(
               ? tb.content
               : Array.isArray(tb.content)
                 ? tb.content
-                    .map((c: any) => (typeof c === 'string' ? c : c.text || JSON.stringify(c)))
+                    .map((c) => (typeof c === 'string' ? c : c.text || JSON.stringify(c)))
                     .join('\n')
                 : JSON.stringify(tb.content ?? '');
             const resultEvent: TraceToolResultEvent = {
@@ -436,7 +444,7 @@ export async function parseClaudeSession(
               sourceType: 'claude-code',
               sourceFile: context.filePath,
               sourceLine: lineNum,
-              sourceVersion: (context as any).sourceVersion || 'unknown',
+              sourceVersion: context.sourceVersion || 'unknown',
               cwd: sessionCwd,
               gitBranch: sessionGitBranch,
             },
@@ -647,6 +655,7 @@ export async function parseClaudeSessionAppend(
 
     try {
       const parsed: ClaudeJsonlLine = JSON.parse(line);
+      if (SKIPPED_RECORD_TYPES.has(parsed.type)) continue;
 
       if (typeof parsed.cwd === 'string' && parsed.cwd.trim()) {
         sessionCwd = parsed.cwd;
@@ -665,11 +674,11 @@ export async function parseClaudeSessionAppend(
 
       const isCompact =
         parsed.type === 'compact' ||
-        (parsed as any).isCompactSummary === true;
+        parsed.isCompactSummary === true;
       if (isCompact) {
         const truncatedUuids: string[] =
-          (parsed as any).compact?.truncatedUuids ||
-          (parsed as any).truncatedUuids ||
+          parsed.compact?.truncatedUuids ||
+          parsed.truncatedUuids ||
           [];
         const compactMsg: TraceMessage = {
           id: `${context.uuid}-${ordinal}`,
@@ -755,7 +764,7 @@ export async function parseClaudeSessionAppend(
       }
 
       if (role === 'user' && Array.isArray(parsed.message.content)) {
-        const blocks = parsed.message.content as any[];
+        const blocks = parsed.message.content;
         const toolResultBlocks = blocks.filter((b) => b.type === 'tool_result');
         const nonToolResultBlocks = blocks.filter((b) => b.type !== 'tool_result');
 
@@ -764,7 +773,7 @@ export async function parseClaudeSessionAppend(
             ? tb.content
             : Array.isArray(tb.content)
               ? tb.content
-                  .map((c: any) => (typeof c === 'string' ? c : c.text || JSON.stringify(c)))
+                  .map((c) => (typeof c === 'string' ? c : c.text || JSON.stringify(c)))
                   .join('\n')
               : JSON.stringify(tb.content ?? '');
           const maybeFallback = addToolResultEvent(
@@ -1032,7 +1041,7 @@ function extractClaudeSessionContext(
  * Create an error session for failure cases
  */
 function createErrorSession(
-  context: SessionContext,
+  context: ClaudeSessionContext,
   errorMsg: string
 ): TraceSession {
   return {
@@ -1078,8 +1087,8 @@ function getClaudeTextContent(parsed: ClaudeJsonlLine): string {
   if (!Array.isArray(content)) return '';
 
   return content
-    .filter((block: any) => block?.type === 'text' && typeof block.text === 'string')
-    .map((block: any) => block.text)
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
     .join('\n');
 }
 
@@ -1118,7 +1127,7 @@ function extractXmlTag(content: string, tagName: string): string | undefined {
 }
 
 function createClaudeSystemMessage(
-  context: SessionContext,
+  context: ClaudeSessionContext,
   ordinal: number,
   lineNum: number,
   content: string,
@@ -1141,7 +1150,7 @@ function createClaudeSystemMessage(
       sourceType: 'claude-code',
       sourceFile: context.filePath,
       sourceLine: lineNum,
-      sourceVersion: (context as any).sourceVersion || 'unknown',
+      sourceVersion: context.sourceVersion || 'unknown',
       cwd,
       gitBranch,
     },
@@ -1164,7 +1173,7 @@ function createClaudeSystemMessage(
 function parseMessage(
   parsed: ClaudeJsonlLine,
   ordinal: number,
-  context: SessionContext,
+  context: ClaudeSessionContext,
   lineNum: number,
   cwd?: string,
   gitBranch?: string
@@ -1183,8 +1192,8 @@ function parseMessage(
   } else if (Array.isArray(msg.content)) {
     // Concatenate text blocks; tool_use blocks handled separately
     const textBlocks = msg.content
-      .filter((b: any) => b.type === 'text')
-      .map((b: any) => b.text || '');
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text || '');
     content = textBlocks.join('\n');
   }
 
@@ -1192,7 +1201,7 @@ function parseMessage(
     sourceType: 'claude-code',
     sourceFile: context.filePath,
     sourceLine: lineNum,
-    sourceVersion: (context as any).sourceVersion || 'unknown',
+    sourceVersion: context.sourceVersion || 'unknown',
     cwd,
     gitBranch,
   };
@@ -1213,7 +1222,8 @@ function parseMessage(
     content,
     timestamp: parsed.timestamp,
     model: msg.model,
-    tokenUsage: normalizeClaudeTokenUsage(msg.usage),
+    requestId: msg.id,
+    tokenUsage: normalizeClaudeTokenUsage(msg.usage, msg.id),
     sourceMetadata,
   };
 }
@@ -1240,7 +1250,7 @@ function parseMessage(
  */
 function extractClaudeActivities(
   raw: ClaudeJsonlLine,
-  context: SessionContext,
+  context: ClaudeSessionContext,
   lineNum: number,
   messageOrdinal: number
 ): { toolCalls: TraceToolCall[]; thinkingBlocks: TraceThinkingBlock[] } {
@@ -1277,18 +1287,6 @@ function extractClaudeActivities(
   }
 
   return { toolCalls, thinkingBlocks };
-}
-
-/**
- * @deprecated Use extractClaudeActivities instead.
- * Kept for backward compatibility — delegates to extractClaudeActivities.
- */
-function extractClaudeToolCalls(
-  raw: ClaudeJsonlLine,
-  context: SessionContext,
-  lineNum: number
-): TraceToolCall[] {
-  return extractClaudeActivities(raw, context, lineNum, 0).toolCalls;
 }
 
 /**

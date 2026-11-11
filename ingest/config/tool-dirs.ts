@@ -22,6 +22,13 @@ export interface ToolDirDef {
 
 export const TOOL_DIR_REGISTRY: ToolDirDef[] = [
   {
+    type: 'commandcode',
+    displayName: 'Command Code',
+    envVar: 'COMMANDCODE_PROJECTS_DIR',
+    configKey: 'commandcode_project_dirs',
+    defaultDirs: ['.commandcode/projects'],
+  },
+  {
     type: 'openclaw',
     displayName: 'OpenClaw',
     envVar: 'OPENCLAW_DIR',

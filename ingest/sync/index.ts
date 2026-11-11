@@ -9,17 +9,28 @@
  */
 
 import Database from 'better-sqlite3';
+import { encodeMessageUsage } from '../db/message-usage';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getDatabase } from '../db';
+import { isCommandCodeTranscript } from './sources';
 import { IncrementalParseDelta, ParseResult, TokenUsageAttribution } from '../parser/types';
 import { sseManager } from '../src/sse';
 import { logger } from '../logger';
+import { getCodexSessionMeta } from '../parser/codex-meta';
 import type { TokenUsage } from '@/types/trace';
 
-export const PARSER_CACHE_VERSION = 'parser-v13-local-timezone-rollups';
+import {
+  isOpenClawDatabasePath, openClawDatabasePathForChange, listOpenClawSqliteSessions,
+  parseOpenClawSqliteSession, OPENCLAW_DATABASE_NAME,
+} from '../parser/openclaw-sqlite';
+
+import { backfillOpenClawRelationships } from './openclaw-lineage';
+import { backfillSourceRelationships, type SessionLineageEdge } from './session-lineage';
+
+export const PARSER_CACHE_VERSION = 'parser-v17-current-storage-request-identity';
 
 const claudeProjectPathCache = new Map<string, string | null>();
 
@@ -64,7 +75,7 @@ export interface SyncObserver {
   onFileComplete?: (event: SyncProgressEvent) => void;
 }
 
-export type SyncSourceType = 'openclaw' | 'claude-code' | 'codex' | 'opencode' | 'qoder';
+export type SyncSourceType = 'openclaw' | 'claude-code' | 'codex' | 'commandcode' | 'opencode' | 'qoder';
 
 export interface FileSnapshotWithIdentity {
   size: number;
@@ -949,6 +960,14 @@ function buildParserCacheHash(source: string, fileHash: string): string {
   return `${PARSER_CACHE_VERSION}:${source}:${fileHash}`;
 }
 
+function commandCodeCacheHash(filePath: string): string {
+  const transcriptHash = computeFileHash(filePath);
+  const metadataPath = filePath.replace(/\.jsonl$/, '.meta.json');
+  let metadataHash = 'missing';
+  try { metadataHash = computeFileHash(metadataPath); } catch { /* Optional title sidecar. */ }
+  return buildParserCacheHash('commandcode', `${transcriptHash}:${metadataHash}`);
+}
+
 function hasCurrentParserCacheHash(sourceType: SyncSourceType, fileHash: string | null): boolean {
   return Boolean(fileHash?.startsWith(`${PARSER_CACHE_VERSION}:${sourceType}:`));
 }
@@ -1428,7 +1447,9 @@ function shouldSkipBeforeParse(
       existing &&
       existing.file_size === snapshot.size &&
       existing.file_mtime === snapshot.mtimeIso &&
-      hasCurrentParserCacheHash(sourceType, existing.file_hash)
+      (sourceType === 'commandcode'
+        ? existing.file_hash === commandCodeCacheHash(filePath)
+        : hasCurrentParserCacheHash(sourceType, existing.file_hash))
     );
   } catch {
     return false;
@@ -1581,6 +1602,24 @@ export function writeSessionToDatabase(
     // Transactional write: all inserts/deletes in a single SQLite transaction
     // -------------------------------------------------------------------------
     const writeTransaction = database.transaction(() => {
+      if (parseResult.session.source === 'codex' && sourceFile) {
+        database.prepare(`
+          DELETE FROM sessions WHERE source = 'codex' AND file_path = ? AND id != ?
+        `).run(sourceFile, parseResult.session.id);
+      }
+      const parentSessionId = parseResult.session.parentSessionId;
+      const rootSessionId = parseResult.session.rootSessionId;
+      const source = parseResult.session.source;
+      const deferReferences = source === 'codex' || source === 'openclaw' || source === 'opencode';
+      const hasRelatedSession = (id: string | undefined) => id && database.prepare(
+        'SELECT 1 FROM sessions WHERE id = ? AND source = ?'
+      ).get(id, source);
+      // Metadata may arrive before the parent's rollout. Keep its evidence in
+      // source metadata and defer foreign keys until a same-source parent exists.
+      const storedParentId = !deferReferences || hasRelatedSession(parentSessionId)
+        ? parentSessionId : undefined;
+      const storedRootId = !deferReferences || hasRelatedSession(rootSessionId)
+        ? rootSessionId : undefined;
       if (existing) {
         // Delete derived rows in dependency order before re-inserting
         // tool_result_events reference tool_calls, so delete events first.
@@ -1651,8 +1690,8 @@ export function writeSessionToDatabase(
           parseResult.session.metrics.terminationStatus || '',
           parseResult.session.name || '',
           parseResult.session.project,
-          parseResult.session.rootSessionId || null,
-          parseResult.session.parentSessionId || null,
+          storedRootId || null,
+          storedParentId || null,
           parseResult.session.relationshipType || 'root',
           parseResult.session.cwd || null,
           parseResult.session.gitBranch || null,
@@ -1692,8 +1731,8 @@ export function writeSessionToDatabase(
           parseResult.session.startedAt,
           parseResult.session.endedAt,
           parseResult.session.status,
-          parseResult.session.rootSessionId || null,
-          parseResult.session.parentSessionId || null,
+          storedRootId || null,
+          storedParentId || null,
           parseResult.session.relationshipType || 'root',
           parseResult.session.metrics.messageCount,
           parseResult.session.metrics.userMessageCount,
@@ -1755,7 +1794,7 @@ export function writeSessionToDatabase(
           message.turnId || null,
           typeof message.turnIndex === 'number' ? message.turnIndex : null,
           message.isRealUserInput ? 1 : 0,
-          message.tokenUsage ? JSON.stringify(message.tokenUsage) : '',
+          encodeMessageUsage(message),
           message.sourceMetadata.sourceFile,
           message.sourceMetadata.sourceLine || null
         );
@@ -1989,7 +2028,7 @@ export function appendSessionDeltaToDatabase(
           message.turnId || null,
           typeof message.turnIndex === 'number' ? message.turnIndex : null,
           message.isRealUserInput ? 1 : 0,
-          message.tokenUsage ? JSON.stringify(message.tokenUsage) : '',
+          encodeMessageUsage(message),
           message.sourceMetadata.sourceFile,
           message.sourceMetadata.sourceLine || null
         );
@@ -2236,6 +2275,7 @@ export interface SyncSourceOptions {
 }
 
 interface SyncFileCandidate {
+  openClawSqlite?: { dbPath: string; sessionId: string };
   filePath: string;
   project: string;
   mtimeMs: number;
@@ -2248,6 +2288,7 @@ interface IncrementalParserContext {
   currentTurnId?: string;
   currentModel?: string;
   knownToolCallIds: string[];
+  codexPreviousTotalUsage?: TokenUsage;
 }
 
 function isSessionFileName(sourceType: SyncSourceType, fileName: string): boolean {
@@ -2269,6 +2310,14 @@ async function collectSessionFileCandidates(
 
   for (const source of sources) {
     if (source.error || source.sessionCount === 0) continue;
+    if (sourceType === 'openclaw' && isOpenClawDatabasePath(source.path)) {
+      for (const session of await listOpenClawSqliteSessions(source.path)) {
+        candidates.push({ filePath: `${source.path}#${session.id}`,
+          openClawSqlite: { dbPath: source.path, sessionId: session.id },
+          project: extractProjectFromPath(source.path, sourceType), mtimeMs: session.updatedAt });
+      }
+      continue;
+    }
 
     let files: string[];
     try {
@@ -2281,6 +2330,7 @@ async function collectSessionFileCandidates(
       if (!isSessionFileName(sourceType, file)) continue;
 
       const filePath = path.join(source.path, file);
+      if (sourceType === 'commandcode' && !isCommandCodeTranscript(filePath)) continue;
       let mtimeMs = 0;
       if (opts.sortByMtimeDesc || typeof opts.limit === 'number') {
         try {
@@ -2296,6 +2346,24 @@ async function collectSessionFileCandidates(
         project: extractProjectFromPath(filePath, sourceType),
         mtimeMs,
       });
+    }
+  }
+
+  if (sourceType === 'openclaw') {
+    // SQLite owns live sessions; do not re-import their JSONL exports or backups.
+    const priority = (candidate: SyncFileCandidate) => candidate.openClawSqlite ? 0
+      : candidate.filePath.endsWith('.jsonl') ? 1 : 2;
+    candidates.sort((left, right) => priority(left) - priority(right) || left.filePath.localeCompare(right.filePath));
+    const seen = new Set<string>();
+    for (let index = 0; index < candidates.length;) {
+      const candidate = candidates[index];
+      const id = candidate.openClawSqlite?.sessionId ?? path.basename(candidate.filePath).split('.jsonl')[0];
+      if (seen.has(id)) {
+        candidates.splice(index, 1);
+      } else {
+        seen.add(id);
+        index++;
+      }
     }
   }
 
@@ -2336,6 +2404,8 @@ export async function syncSource(
     result = await syncOpenClawSource(opts);
   } else if (sourceType === 'claude-code') {
     result = await syncClaudeCodeSource(opts);
+  } else if (sourceType === 'commandcode') {
+    result = await syncCommandCodeSource(opts);
   } else if (sourceType === 'codex') {
     result = await syncCodexSource(opts);
   } else if (sourceType === 'opencode') {
@@ -2373,19 +2443,36 @@ async function collectPathFileCandidates(
   const roots = getConfig().toolDirs.get(sourceType) ?? [];
   const candidates: SyncFileCandidate[] = [];
 
-  for (const rawPath of Array.from(new Set(paths))) {
+  const transcriptPaths = sourceType === 'commandcode'
+    ? paths.map(filePath => filePath.replace(/\.meta\.json$/, '.jsonl'))
+    : paths;
+  for (const rawPath of Array.from(new Set(transcriptPaths))) {
     const filePath = path.resolve(rawPath);
     const fileName = path.basename(filePath);
+    const sqlitePath = sourceType === 'openclaw' ? openClawDatabasePathForChange(filePath) : undefined;
+    if (sqlitePath && fs.existsSync(sqlitePath) && (roots.length === 0 || roots.some((root) => isWithinRoot(sqlitePath, root)))) {
+      for (const session of await listOpenClawSqliteSessions(sqlitePath)) {
+        if (candidates.some((candidate) => candidate.openClawSqlite?.dbPath === sqlitePath && candidate.openClawSqlite.sessionId === session.id)) continue;
+        candidates.push({ filePath: `${sqlitePath}#${session.id}`,
+          openClawSqlite: { dbPath: sqlitePath, sessionId: session.id },
+          project: extractProjectFromPath(sqlitePath, sourceType), mtimeMs: session.updatedAt });
+      }
+      continue;
+    }
 
     if (!isSessionFileName(sourceType, fileName)) continue;
     if (roots.length > 0 && !roots.some((root) => isWithinRoot(filePath, root))) continue;
     if (!fs.existsSync(filePath)) continue;
+    if (sourceType === 'commandcode' && !isCommandCodeTranscript(filePath)) continue;
 
-    candidates.push({
-      filePath,
-      project: extractProjectFromPath(filePath, sourceType),
-      mtimeMs: 0,
-    });
+    if (sourceType === 'openclaw') {
+      const siblingDb = path.join(path.dirname(path.dirname(filePath)), 'agent', OPENCLAW_DATABASE_NAME);
+      if (fs.existsSync(siblingDb)) {
+        const id = fileName.split('.jsonl')[0];
+        if ((await listOpenClawSqliteSessions(siblingDb)).some((session) => session.id === id)) continue;
+      }
+    }
+    candidates.push({ filePath, project: extractProjectFromPath(filePath, sourceType), mtimeMs: 0 });
   }
 
   return candidates.sort((a, b) => a.filePath.localeCompare(b.filePath));
@@ -2399,11 +2486,16 @@ async function parseAndWriteCandidate(
   relationshipsByChild: CodexRelationshipsByChild = new Map()
 ): Promise<void> {
   const filePath = candidate.filePath;
+  if (candidate.openClawSqlite) {
+    await syncOpenClawSqliteCandidate(candidate, opts, totalResult);
+    return;
+  }
   const snapshot = tryGetFileSnapshot(filePath);
   recordFileConsidered(totalResult, snapshot);
   opts.observer?.onFileStart?.(buildProgressEvent(sourceType, filePath, snapshot, totalResult, 0));
 
   if (snapshot && shouldSkipBeforeParse(sourceType, filePath, snapshot, opts)) {
+    if (sourceType === 'codex') await recordCodexMetadataRelationship(filePath, relationshipsByChild);
     recordFileSkippedBeforeParse(totalResult);
     opts.observer?.onFileComplete?.(
       buildProgressEvent(sourceType, filePath, snapshot, totalResult, snapshot.size)
@@ -2412,9 +2504,10 @@ async function parseAndWriteCandidate(
   }
 
   let fullReparseReason: string | null = null;
-  if (sourceType !== 'openclaw') {
+  if (sourceType !== 'openclaw' && sourceType !== 'commandcode') {
     const decision = decideCursorSync(sourceType, filePath, snapshot, opts);
     if (decision.type === 'skip_unchanged') {
+      if (sourceType === 'codex') await recordCodexMetadataRelationship(filePath, relationshipsByChild);
       recordFileSkippedBeforeParse(totalResult);
       opts.observer?.onFileComplete?.(
         buildProgressEvent(sourceType, filePath, snapshot, totalResult, snapshot?.size ?? 0)
@@ -2490,12 +2583,35 @@ async function parseFullCandidate(
     recordFileParsed(totalResult, 'full');
     parseResult.session.name = extractSessionName(parseResult);
     parseResult.session.project = extractProjectFromParsedSession(parseResult, candidate.project);
+    if (parseResult.errors.length > 0) {
+      logger.warn(
+        `[sync:claude-code] ${parseResult.errors.length} parse error(s) in ${filePath}:`,
+        parseResult.errors.slice(0, 5).map((e) => `line ${e.line}: ${e.error}`)
+      );
+    }
     const writeResult = writeSessionToDatabase(parseResult, undefined, filePath, { force: opts.force });
+    if (writeResult.errors.length > 0) {
+      logger.error(
+        `[sync:claude-code] DB write failed, session not stored: ${filePath}:`,
+        writeResult.errors.slice(0, 5)
+      );
+    }
     if (writeResult.errors.length === 0) {
       const database = getDatabase();
       updateCursorAfterFullParse(database, sourceType, filePath, parseResult, fallbackReason);
     }
     mergeSyncResult(totalResult, writeResult);
+    return;
+  }
+
+  if (sourceType === 'commandcode') {
+    const { parseCommandCodeSession } = await import('../parser/commandcode');
+    const cacheFileHash = commandCodeCacheHash(filePath);
+    const parseResult = await parseCommandCodeSession(filePath, candidate.project);
+    recordFileParsed(totalResult, 'full');
+    parseResult.session.name = parseResult.session.name || extractSessionName(parseResult);
+    parseResult.session.project = extractProjectFromParsedSession(parseResult, candidate.project);
+    mergeSyncResult(totalResult, writeSessionToDatabase(parseResult, undefined, filePath, { force: opts.force, cacheFileHash }));
     return;
   }
 
@@ -2578,6 +2694,7 @@ async function parseIncrementalAppendCandidate(
     currentModel: parserContext.currentModel,
     knownToolCallIds: parserContext.knownToolCallIds,
     parserVersion: PARSER_CACHE_VERSION,
+    codexPreviousTotalUsage: parserContext.codexPreviousTotalUsage,
   };
 
   const delta: IncrementalParseDelta = sourceType === 'claude-code'
@@ -2631,7 +2748,24 @@ function readIncrementalParserContext(cursor: IngestFileCursor): IncrementalPars
       WHERE session_id = ?
     `).all(cursor.sessionId) as { tool_id: string }[];
 
+    const session = cursor.sourceType === 'codex' ? database.prepare(`
+      SELECT total_input_tokens, total_output_tokens, total_cache_read_tokens,
+        total_cache_write_tokens, total_reasoning_tokens, total_tokens
+      FROM sessions WHERE id = ? AND source = 'codex'
+    `).get(cursor.sessionId) as {
+      total_input_tokens: number; total_output_tokens: number; total_cache_read_tokens: number;
+      total_cache_write_tokens: number; total_reasoning_tokens: number; total_tokens: number;
+    } | undefined : undefined;
+
     return {
+      codexPreviousTotalUsage: session ? {
+        inputTokens: session.total_input_tokens,
+        outputTokens: session.total_output_tokens,
+        cacheReadTokens: session.total_cache_read_tokens,
+        cacheWriteTokens: session.total_cache_write_tokens,
+        reasoningTokens: session.total_reasoning_tokens,
+        totalTokens: session.total_tokens,
+      } : undefined,
       currentTurnId: message?.turn_id || undefined,
       currentModel: message?.model || undefined,
       knownToolCallIds: toolRows.map((row) => row.tool_id).filter(Boolean),
@@ -2665,12 +2799,52 @@ function rememberCodexRelationship(
   });
 }
 
+async function recordCodexMetadataRelationship(
+  filePath: string,
+  relationships: CodexRelationshipsByChild
+): Promise<void> {
+  const stored = getDatabase().prepare(`
+    SELECT id, parent_session_id, root_session_id, relationship_type
+    FROM sessions WHERE source = 'codex' AND file_path = ? LIMIT 1
+  `).get(filePath) as {
+    id: string; parent_session_id: string | null;
+    root_session_id: string | null; relationship_type: string | null;
+  } | undefined;
+  if (stored?.parent_session_id) {
+    rememberCodexRelationship(relationships, stored.id, stored.parent_session_id, stored.root_session_id);
+    return;
+  }
+  // Only unresolved subagent metadata needs a header read on unchanged files.
+  if (stored?.relationship_type !== 'subagent') return;
+
+  const readline = await import('readline');
+  const stream = fs.createReadStream(filePath);
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      const parsed = JSON.parse(line);
+      if (parsed.type === 'session_meta') {
+        const meta = getCodexSessionMeta(parsed);
+        rememberCodexRelationship(relationships, meta?.session_id, meta?.parentSessionId);
+      }
+      break;
+    }
+  } catch {
+    // Header recovery is best-effort; full parsing reports malformed records.
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+}
+
 function recordCodexRelationshipsFromParseResult(
   parseResult: ParseResult,
   relationshipsByChild: CodexRelationshipsByChild
 ): void {
   const parentSessionId = parseResult.session.id;
   const rootSessionId = parseResult.session.rootSessionId || parentSessionId;
+  rememberCodexRelationship(relationshipsByChild, parentSessionId, parseResult.session.parentSessionId, rootSessionId);
 
   for (const activity of parseResult.activities) {
     if (activity.type !== 'subagent_link') continue;
@@ -2691,6 +2865,7 @@ function recordCodexRelationshipsFromDelta(
 ): void {
   const parentSessionId = delta.sessionId;
   const rootSessionId = delta.sessionPatch.rootSessionId || parentSessionId;
+  rememberCodexRelationship(relationshipsByChild, parentSessionId, delta.sessionPatch.parentSessionId, rootSessionId);
 
   for (const link of delta.subagentLinks) {
     if (link.subagentSource !== 'codex') continue;
@@ -2757,6 +2932,7 @@ function collectCodexRelationshipsFromStoredLinks(
   }>;
 
   for (const row of rows) {
+    if (row.child_session_id && relationshipsByChild.has(row.child_session_id)) continue;
     rememberCodexRelationship(
       relationshipsByChild,
       row.child_session_id,
@@ -2775,7 +2951,7 @@ function applyCodexRelationshipToSession(
   const relationship = relationshipsByChild.get(parseResult.session.id)
     ?? lookupCodexRelationshipFromDatabase(parseResult.session.id);
 
-  if (!relationship) return;
+  if (!relationship || parseResult.session.parentSessionId) return;
 
   parseResult.session.parentSessionId = relationship.parentSessionId;
   parseResult.session.rootSessionId = relationship.rootSessionId || relationship.parentSessionId;
@@ -2823,6 +2999,14 @@ export async function syncPaths(
     }
   }
 
+  if (sourceType === 'openclaw') {
+    try {
+      totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(), paths));
+    } catch (error) {
+      totalResult.errors.push(`OpenClaw relationship backfill failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   upsertSyncStatus(sourceType, totalResult);
   sseManager.emit('sync_complete', {
     source: sourceType,
@@ -2844,52 +3028,56 @@ export async function syncPaths(
  * Uses discoverOpenClawSources() and parseOpenClawSession() from the parser module.
  * This is the original sync path preserved from Phase 2.
  */
+async function syncOpenClawSqliteCandidate(
+  candidate: SyncFileCandidate, opts: SyncSourceOptions, totalResult: SyncResult,
+): Promise<void> {
+  const { dbPath, sessionId } = candidate.openClawSqlite!;
+  const snapshot = tryGetFileSnapshot(dbPath);
+  recordFileConsidered(totalResult, snapshot);
+  opts.observer?.onFileStart?.(buildProgressEvent('openclaw', candidate.filePath, snapshot, totalResult, 0));
+  const { result, fingerprint } = await parseOpenClawSqliteSession(dbPath, sessionId, candidate.project);
+  recordFileParsed(totalResult, 'full');
+  result.session.name ||= extractSessionName(result);
+  const written = writeSessionToDatabase(result, undefined, candidate.filePath, {
+    force: opts.force, cacheFileHash: buildParserCacheHash('openclaw', fingerprint), sourceFileStatsPath: dbPath,
+  });
+  mergeSyncResult(totalResult, written);
+  if (result.session.metrics.isTruncated) {
+    totalResult.errors.push(`Partial OpenClaw session ${sessionId}: ${result.warnings.slice(-3).join('; ')}`);
+  }
+  opts.observer?.onFileComplete?.(buildProgressEvent('openclaw', candidate.filePath, snapshot, totalResult, snapshot?.size ?? 0));
+}
+
 async function syncOpenClawSource(opts: SyncSourceOptions): Promise<SyncResult> {
   const { discoverOpenClawSources } = await import('./sources');
-  const { parseOpenClawSession } = await import('../parser/openclaw');
-
   const { getConfig } = await import('../config');
-  const toolDirs = getConfig().toolDirs;
-  const dirs = opts.basePath ? [opts.basePath] : toolDirs.get('openclaw');
+  const dirs = opts.basePath ? [opts.basePath] : getConfig().toolDirs.get('openclaw');
   const sources = await discoverOpenClawSources(dirs);
   const totalResult = createSyncResult();
-
+  for (const source of sources) {
+    if (source.error) totalResult.errors.push(`OpenClaw source ${source.path}: ${source.error}`);
+    if (source.warning) totalResult.errors.push(`OpenClaw source warning ${source.path}: ${source.warning}`);
+  }
   try {
     const candidates = await collectSessionFileCandidates(sources, 'openclaw', opts);
-
     for (const candidate of candidates) {
-      const filePath = candidate.filePath;
-
       try {
-        const snapshot = tryGetFileSnapshot(filePath);
-        recordFileConsidered(totalResult, snapshot);
-        if (snapshot && shouldSkipBeforeParse('openclaw', filePath, snapshot, opts)) {
-          recordFileSkippedBeforeParse(totalResult);
-          continue;
-        }
-
-        const parseResult = await parseOpenClawSession(filePath, candidate.project);
-        recordFileParsed(totalResult);
-        parseResult.session.name = extractSessionName(parseResult);
-        parseResult.session.project = extractProjectFromParsedSession(parseResult, candidate.project);
-        parseResult.session.agentName = extractAgentNameFromPath(filePath, 'openclaw')
-        const result = writeSessionToDatabase(parseResult, undefined, filePath, { force: opts.force });
-        mergeSyncResult(totalResult, result);
-      } catch (err) {
-        totalResult.errors.push(`Failed to parse ${filePath}: ${err}`);
+        await parseAndWriteCandidate('openclaw', candidate, opts, totalResult);
+      } catch (error) {
+        totalResult.errors.push(`Failed to parse ${candidate.filePath}: ${error}`);
       }
     }
-  } catch (err) {
-    totalResult.errors.push(`Failed to collect OpenClaw session files: ${err}`);
+  } catch (error) {
+    totalResult.errors.push(`Failed to collect OpenClaw sessions: ${error}`);
   }
-
-  sseManager.emit('sync_complete', {
-    source: 'openclaw',
-    sessionsInserted: totalResult.sessionsInserted,
-    sessionsUpdated: totalResult.sessionsUpdated,
-    errors: totalResult.errors.length,
-  });
-
+  try {
+    totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(),
+      sources.filter((source) => !source.error).map((source) => source.path)));
+  } catch (error) {
+    totalResult.errors.push(`OpenClaw relationship backfill failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  sseManager.emit('sync_complete', { source: 'openclaw', sessionsInserted: totalResult.sessionsInserted,
+    sessionsUpdated: totalResult.sessionsUpdated, errors: totalResult.errors.length });
   return totalResult;
 }
 
@@ -2929,6 +3117,40 @@ async function syncClaudeCodeSource(opts: SyncSourceOptions): Promise<SyncResult
 
   sseManager.emit('sync_complete', {
     source: 'claude-code',
+    sessionsInserted: totalResult.sessionsInserted,
+    sessionsUpdated: totalResult.sessionsUpdated,
+    errors: totalResult.errors.length,
+  });
+
+  return totalResult;
+}
+
+async function syncCommandCodeSource(opts: SyncSourceOptions): Promise<SyncResult> {
+  const { discoverCommandCodeSources } = await import('./sources');
+
+  const { getConfig } = await import('../config');
+  const toolDirs = getConfig().toolDirs;
+  const sources = await discoverCommandCodeSources(toolDirs.get('commandcode'));
+  const totalResult = createSyncResult();
+
+  try {
+    const candidates = await collectSessionFileCandidates(sources, 'commandcode', opts);
+
+    for (const candidate of candidates) {
+      try {
+        await parseAndWriteCandidate('commandcode', candidate, opts, totalResult);
+      } catch (err) {
+        totalResult.errors.push(
+          `Failed to parse Command Code session ${candidate.filePath}: ${err}`
+        );
+      }
+    }
+  } catch (err) {
+    totalResult.errors.push(`Failed to collect Command Code session files: ${err}`);
+  }
+
+  sseManager.emit('sync_complete', {
+    source: 'commandcode',
     sessionsInserted: totalResult.sessionsInserted,
     sessionsUpdated: totalResult.sessionsUpdated,
     errors: totalResult.errors.length,
@@ -3156,7 +3378,21 @@ export function backfillCodexRelationships(
       if (!childId || childId === rel.parentSessionId || !rel.parentSessionId) {
         continue;
       }
-      const result = stmt.run(rel.parentSessionId, rel.rootSessionId || rel.parentSessionId, childId);
+      const parent = database.prepare("SELECT 1 FROM sessions WHERE id = ? AND source = 'codex'").get(rel.parentSessionId);
+      if (!parent) continue;
+      let rootId = rel.rootSessionId || rel.parentSessionId;
+      const visited = new Set([childId]);
+      while (!visited.has(rootId)) {
+        visited.add(rootId);
+        const ancestor = relationships.get(rootId)?.parentSessionId
+          || (database.prepare("SELECT parent_session_id FROM sessions WHERE id = ? AND source = 'codex'").get(rootId) as { parent_session_id: string | null } | undefined)?.parent_session_id;
+        if (!ancestor || visited.has(ancestor)) break;
+        rootId = ancestor;
+      }
+      if (!database.prepare("SELECT 1 FROM sessions WHERE id = ? AND source = 'codex'").get(rootId)) {
+        rootId = rel.parentSessionId;
+      }
+      const result = stmt.run(rel.parentSessionId, rootId, childId);
       totalUpdated += result.changes;
     }
   });
@@ -3172,6 +3408,7 @@ export function backfillCodexRelationships(
 async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> {
   const { discoverOpencodeSources } = await import('./sources');
   const { parseOpencodeSession, computeOpencodeSkipKey } = await import('../parser/opencode');
+  const { inspectOpencodeSchema, listOpencodeSessions, openOpencodeReadonly, opencodeSessionFingerprint } = await import('../parser/opencode-storage');
 
   const { getConfig } = await import('../config');
   const toolDirs = getConfig().toolDirs;
@@ -3191,7 +3428,7 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
   let ocDb: Database.Database;
 
   try {
-    ocDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+    ocDb = openOpencodeReadonly(dbPath);
   } catch (err) {
     totalResult.errors.push(
       `Failed to open OpenCode DB at ${dbPath}: ${err instanceof Error ? err.message : err}`
@@ -3200,9 +3437,16 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
   }
 
   try {
-    const sessionRows = ocDb.prepare(
-      'SELECT s.*, p.worktree as project_worktree FROM session s LEFT JOIN project p ON s.project_id = p.id ORDER BY s.time_updated DESC'
-    ).all() as (Record<string, unknown> & { project_worktree?: string | null })[];
+    const schema = inspectOpencodeSchema(ocDb);
+    const sessionRows = listOpencodeSessions(ocDb, schema);
+    const relationships = new Map<string, SessionLineageEdge>();
+    for (const row of sessionRows) {
+      const parent = row.parent_id || row.fork_session_id;
+      relationships.set(`opencode:${row.id}`, {
+        hasParent: !!parent, parentId: parent ? `opencode:${parent}` : undefined,
+        kind: row.parent_id ? 'subagent' : row.fork_session_id ? 'fork' : 'root',
+      });
+    }
 
     if (totalResult.metrics) {
       totalResult.metrics.filesConsidered = sessionRows.length;
@@ -3213,18 +3457,8 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
         const rawSessionId = row.id as string;
         const sessionRow = row as unknown as import('../parser/opencode').OpencodeSessionRow;
 
-        const msgCountRow = ocDb.prepare(
-          'SELECT COUNT(*) as cnt FROM message WHERE session_id = ?'
-        ).get(rawSessionId) as { cnt: number };
-
-        const partCountRow = ocDb.prepare(
-          'SELECT COUNT(*) as cnt FROM part WHERE session_id = ?'
-        ).get(rawSessionId) as { cnt: number };
-
         const skipKey = computeOpencodeSkipKey(
-          sessionRow,
-          msgCountRow.cnt,
-          partCountRow.cnt,
+          sessionRow, 0, 0, opencodeSessionFingerprint(ocDb, row, schema),
         );
 
         const canonicalId = `opencode:${rawSessionId}`;
@@ -3245,6 +3479,10 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
         const projectOverride = (row.project_worktree as string) || (row.directory as string) || undefined;
         const parseResult = await parseOpencodeSession(dbPath, rawSessionId, projectOverride);
 
+        if (parseResult.errors.length) {
+          totalResult.errors.push(...parseResult.errors.map(error => `OpenCode session ${rawSessionId}: ${error.error}`));
+          continue;
+        }
         recordFileParsed(totalResult, 'full');
         parseResult.session.name = parseResult.session.name || extractSessionName(parseResult);
         parseResult.session.project = extractProjectFromParsedSession(parseResult, projectOverride ?? 'default');
@@ -3276,6 +3514,7 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
         }
       }
     }
+    backfillSourceRelationships(database, 'opencode', relationships);
   } catch (err) {
     totalResult.errors.push(
       `Failed to query OpenCode sessions: ${err instanceof Error ? err.message : err}`
@@ -3322,6 +3561,10 @@ export async function collectCodexRelationships(
           if (!line.trim()) continue;
           try {
             const parsed = JSON.parse(line);
+            if (parsed?.type === 'session_meta') {
+              const meta = getCodexSessionMeta(parsed);
+              rememberCodexRelationship(relationships, meta?.session_id, meta?.parentSessionId);
+            }
             const payload = parsed?.event_msg || parsed?.payload;
             if (
               parsed?.type === 'event_msg' &&

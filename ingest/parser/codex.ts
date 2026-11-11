@@ -14,6 +14,7 @@
 import * as fs from 'fs';
 import * as readline from 'readline';
 import * as path from 'path';
+import { getCodexSessionMeta } from './codex-meta';
 import {
   TraceSession,
   TraceMessage,
@@ -28,6 +29,7 @@ import {
 } from '@/types/trace';
 import {
   CodexJsonlLine,
+  CodexPayload,
   CodexTurnContext,
   IncrementalParseDelta,
   IncrementalParseOptions,
@@ -36,10 +38,6 @@ import {
   SessionContext,
   TokenUsageEvent,
 } from './types';
-
-// Codex JSONL payload shape varies by source version; narrow at each use site.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type CodexPayload = Record<string, any>;
 
 interface PendingCodexUserMessage {
   dedupKey: string;
@@ -63,24 +61,6 @@ function getCodexPayload(parsed: CodexJsonlLine): CodexPayload | undefined {
   return parsed.payload && typeof parsed.payload === 'object'
     ? parsed.payload as CodexPayload
     : undefined;
-}
-
-function getCodexSessionMeta(parsed: CodexJsonlLine): {
-  session_id?: string;
-  cwd?: string;
-  git_branch?: string;
-  model?: string;
-} | undefined {
-  if (parsed.session_meta) return parsed.session_meta;
-  const payload = getCodexPayload(parsed);
-  if (!payload) return undefined;
-
-  return {
-    session_id: payload.session_id || payload.id,
-    cwd: payload.cwd,
-    git_branch: payload.git_branch || payload.gitBranch,
-    model: payload.model,
-  };
 }
 
 function getCodexTurnContext(parsed: CodexJsonlLine): {
@@ -420,6 +400,7 @@ export async function parseCodexSession(
   let sessionGitBranch: string | undefined;
   let sessionModel: string | undefined;
   let sessionId: string = context.uuid;
+  let parentSessionId: string | undefined;
   let currentTurnId: string | undefined;
   let currentTurnIndex = -1;
   let pendingUserResponseMessage: PendingCodexUserMessage | undefined;
@@ -493,6 +474,7 @@ export async function parseCodexSession(
         if (sessionMeta.session_id) {
           sessionId = sessionMeta.session_id;
         }
+        parentSessionId = sessionMeta.parentSessionId || parentSessionId;
         if (sessionMeta.cwd) {
           sessionCwd = sessionMeta.cwd;
         }
@@ -662,7 +644,7 @@ export async function parseCodexSession(
             const resultEvent: TraceToolResultEvent = {
               type: 'result_event',
               timestamp: parsed.timestamp,
-              content: ri.output || ri.content || '',
+              content: ri.output || extractCodexMessageContent(ri.content),
               isPartial: ri.status !== 'completed',
             };
             toolCall.resultEvents.push(resultEvent);
@@ -910,7 +892,7 @@ export async function parseCodexSession(
               type: 'result_event',
               timestamp: parsed.timestamp,
               // Real Codex logs use 'output' field; synthetic fixtures may use 'content'
-              content: ev.output || ev.content || '',
+              content: ev.output || extractCodexMessageContent(ev.content),
               isPartial: ev.status !== 'completed',
             };
             toolCall.resultEvents.push(resultEvent);
@@ -1011,9 +993,9 @@ export async function parseCodexSession(
     startedAt,
     endedAt,
     status: endedAt ? 'idle' : 'active',
-    rootSessionId: undefined,
-    parentSessionId: undefined,
-    relationshipType: 'root',
+    rootSessionId: parentSessionId,
+    parentSessionId,
+    relationshipType: parentSessionId ? 'subagent' : 'root',
     sourceSessionId: sessionId,
     cwd: sessionCwd,
     gitBranch: sessionGitBranch,
@@ -1090,7 +1072,9 @@ export async function parseCodexSessionAppend(
   let sessionGitBranch: string | undefined;
   let sessionModel: string | undefined;
   let sessionId = options.sessionId || context.uuid;
-  let lastTokenSnapshotKey: string | undefined;
+  let lastTokenSnapshotKey = options.codexPreviousTotalUsage
+    ? `total:${codexUsageSnapshotKey(options.codexPreviousTotalUsage)}`
+    : undefined;
 
   const markFallback = (reason: string, lineNumber: number, raw: string): IncrementalParseDelta => {
     delta.requiresFullReparse = true;
@@ -1179,10 +1163,18 @@ export async function parseCodexSessionAppend(
       const sessionMeta = getCodexSessionMeta(parsed);
       if (parsed.type === 'session_meta' && sessionMeta) {
         if (sessionMeta.session_id) {
+          if (options.startOffset > 0 && options.sessionId && sessionMeta.session_id !== options.sessionId) {
+            return markFallback('session_identity_changed', record.lineNumber, line);
+          }
           sessionId = sessionMeta.session_id;
           delta.sessionId = sessionMeta.session_id;
           delta.sessionPatch.id = sessionMeta.session_id;
           delta.sessionPatch.sourceSessionId = sessionMeta.session_id;
+        }
+        if (sessionMeta.parentSessionId) {
+          delta.sessionPatch.parentSessionId = sessionMeta.parentSessionId;
+          delta.sessionPatch.rootSessionId = sessionMeta.parentSessionId;
+          delta.sessionPatch.relationshipType = 'subagent';
         }
         if (sessionMeta.cwd) {
           sessionCwd = sessionMeta.cwd;
@@ -1324,7 +1316,7 @@ export async function parseCodexSessionAppend(
             {
               type: 'result_event',
               timestamp,
-              content: ri.output || ri.content || '',
+              content: ri.output || extractCodexMessageContent(ri.content),
               isPartial: ri.status !== 'completed',
             },
             record.lineNumber,
@@ -1471,7 +1463,7 @@ export async function parseCodexSessionAppend(
             {
               type: 'result_event',
               timestamp: parsed.timestamp,
-              content: ev.output || ev.content || '',
+              content: ev.output || extractCodexMessageContent(ev.content),
               isPartial: ev.status !== 'completed',
             },
             record.lineNumber,

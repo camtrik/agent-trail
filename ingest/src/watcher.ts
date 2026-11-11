@@ -11,6 +11,7 @@
 import * as chokidar from 'chokidar';
 import * as fs from 'fs/promises';
 import { logger } from '../logger';
+import { openClawDatabasePathForChange } from '../parser/openclaw-sqlite';
 import type { SyncSourceType } from '../sync/index.js';
 
 // ============================================================================
@@ -134,11 +135,11 @@ export function createWatcher(config: WatcherConfig): WatcherInstance {
   // ==========================================================================
 
   function registerPath(sourceType: SyncSourceType, filePath: string): void {
-    // Filter by extension
-    if (!isValidExtension(filePath, config.fileExtensions)) return;
-
-    // Filter temp files
-    if (isTempFile(filePath)) return;
+    const openClawDb = sourceType === 'openclaw' ? openClawDatabasePathForChange(filePath) : undefined;
+    const openClawArchive = sourceType === 'openclaw' && /\.jsonl\.(?:deleted\.|reset\.|full\.bak$)/.test(filePath);
+    if (!openClawDb && !openClawArchive && !isValidExtension(filePath, config.fileExtensions)) return;
+    if (!openClawArchive && isTempFile(filePath)) return;
+    filePath = openClawDb ?? filePath;
 
     // Add to pending set
     if (!pendingPaths.has(sourceType)) {
@@ -193,7 +194,8 @@ export function createWatcher(config: WatcherConfig): WatcherInstance {
 
           const watcher = chokidar.watch(dir, {
             ignoreInitial: true,
-            depth: 0,
+            // Agent roots contain agent/<database> and sessions/<archive> two levels below.
+            depth: sourceType === 'openclaw' ? 2 : 0,
             awaitWriteFinish: {
               stabilityThreshold: 300,
               pollInterval: 100,
@@ -211,7 +213,7 @@ export function createWatcher(config: WatcherConfig): WatcherInstance {
           });
 
           watcher.on('ready', () => {
-            const filesWatched = (watcher as any)._watched ? Object.keys((watcher as any)._watched).length : 0;
+            const filesWatched = Object.values(watcher.getWatched()).reduce((count, files) => count + files.length, 0);
             status.filesWatched += filesWatched;
             logger.debug(`[watcher] Ready on ${dir} — watching ${filesWatched} files`);
           });

@@ -1,0 +1,7 @@
+[
+  {"type":"session","version":3,"id":"sqlite-session","timestamp":"2026-11-10T00:00:00.000Z","cwd":"/workspace/example"},
+  {"type":"message","id":"user-1","parentId":null,"timestamp":"2026-11-10T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Inspect the example project."}],"timestamp":1794268801000}},
+  {"type":"message","id":"assistant-1","parentId":"user-1","timestamp":"2026-11-10T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Checking files."},{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"example.txt"}}],"model":"example-model","usage":{"input":10,"output":5,"cacheRead":2,"totalTokens":17,"cost":{"total":0.01}}}},
+  {"type":"message","id":"tool-1","parentId":"assistant-1","timestamp":"2026-11-10T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"Example contents."}],"isError":false}},
+  {"type":"message","id":"assistant-2","parentId":"tool-1","timestamp":"2026-11-10T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The example is valid."},{"type":"text","text":"No changes needed."}],"usage":{"input":3,"output":7,"totalTokens":10,"cost":{"total":0.02}}}}
+]

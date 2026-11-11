@@ -37,8 +37,8 @@ describe('ActivityTimeline', () => {
 
     render(<ActivityTimeline timeline={timeline} loading={false} />)
 
-    expect(screen.getByText('STARTED')).toBeTruthy()
-    expect(screen.getByText('COMPLETED')).toBeTruthy()
+    expect(screen.getByText('Session started: Session A')).toBeTruthy()
+    expect(screen.getByText('Session completed: Session A')).toBeTruthy()
 
     const duplicateKeyCalls = consoleError.mock.calls.filter((call) =>
       call.some(

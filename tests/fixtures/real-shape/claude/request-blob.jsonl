@@ -1,0 +1,5 @@
+{"uuid":"rs-user-02","parentUuid":null,"type":"user","message":{"role":"user","content":"[REDACTED]"},"timestamp":"2025-01-01T00:00:00Z"}
+{"uuid":"rs-tool-use-02","parentUuid":"rs-user-02","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_rs02","name":"Bash","input":{"command":"[REDACTED]"}}],"model":"claude-opus-4-5"},"timestamp":"2025-01-01T00:00:01Z"}
+{"type":"api-request-blob","sessionId":"rs-session-01","hash":"rs-hash-01","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_rs02","name":"Bash","input":{"command":"[REDACTED]"}}]}}
+{"type":"api-request-blob","sessionId":"rs-session-01","hash":"rs-hash-02","message":{"role":"user","content":[{"type":"text","text":"[REDACTED system-reminder]"}]}}
+{"uuid":"rs-tool-result-02","parentUuid":"rs-tool-use-02","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_rs02","content":"[REDACTED output]","is_error":false}]},"timestamp":"2025-01-01T00:00:02Z"}

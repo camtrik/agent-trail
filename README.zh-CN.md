@@ -4,7 +4,7 @@
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
 
-**本地 AI 编程代理可观测性仪表盘，支持 Claude Code、Codex、OpenCode、OpenClaw 和 Qoder。**
+**本地 AI 编程代理可观测性仪表盘，支持 Claude Code、Codex、OpenCode、OpenClaw、Qoder 和 Command Code。**
 
 从本地 JSONL / SQLite 文件追踪 token 用量、预估成本、工具调用、子代理树，并完整回放编程代理会话。
 
@@ -114,7 +114,7 @@ docker run --rm -p 127.0.0.1:3030:3030 \
 
 ```bash
 pnpm install
-pnpm dev       # 启动 Next.js (3000) + 摄入服务 (8078)
+pnpm dev       # 启动 Next.js (3029) + 摄入服务 (8078)
 ```
 
 完整配置和环境变量参考见 [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md)。
@@ -169,10 +169,11 @@ docker image rm ghcr.io/camtrik/agent-trail:latest
 | 代理                   | 源文件                                      | 备注                             |
 | ---------------------- | ------------------------------------------- | -------------------------------- |
 | **Claude Code**        | `~/.claude/projects/**/*.jsonl`             | 完整工具调用和子代理回放         |
-| **OpenClaw**           | `~/.openclaw/agents/*/sessions/*.jsonl`     | 网关实时视图 + 文件摄入         |
+| **OpenClaw** | `~/.openclaw/agents/*/agent/openclaw-agent.sqlite` + 归档 JSONL | 运行中 SQLite 与旧归档 |
 | **Codex**              | `~/.codex/sessions/**/*.jsonl`              | 父子会话树                       |
-| **OpenCode**           | `~/.local/share/opencode/opencode.db`       | SQLite 数据源                    |
-| **Qoder**              | 本地缓存数据库                              | Token 计数（成本不计入汇总）     |
+| **OpenCode** | `~/.local/share/opencode/opencode.db` | 旧版与 v2 SQLite schema |
+| **Qoder** | 旧 IDE 本地缓存数据库 | 当前 IDE/Desktop/CLI 兼容性仍待验证 |
+| **Command Code** | `~/.commandcode/projects/**/*.jsonl` | v3 历史和记录成本；可能没有子代理内部轨迹 |
 
 ---
 
@@ -185,6 +186,16 @@ Agent Trail 适用于以下场景：
 - 在本地追踪多个代理的 **LLM token 用量和预估成本**
 - 分析哪些会话或项目消耗了最多的 token
 - 调试昂贵或失败的 AI 编程代理运行
+---
+
+## 兼容性与许可证
+
+源码开发使用 Node.js 24、pnpm 11.1.3、前端端口 3029 和 ingest 端口 8078。npm/Docker 的前端端口为 3030。请在父进程 shell 设置 INGEST_PORT，使两个服务共同继承。
+
+已验证格式、当前存储限制和重建索引方法见[兼容矩阵](docs/COMPATIBILITY.md)。本维护批次尚未发布，已安装的 v0.1.7 不包含这些改动。
+
+项目自有源码、文档和品牌资产按 [MIT 许可证](LICENSE) 发布；第三方依赖保留各自许可证。
+
 ---
 
 ## 隐私

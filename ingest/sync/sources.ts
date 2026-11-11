@@ -9,6 +9,8 @@
  */
 
 import Database from 'better-sqlite3';
+import { inspectOpencodeSchema, listOpencodeSessions, openOpencodeReadonly } from '../parser/opencode-storage';
+import { listOpenClawSqliteSessions, countOpenClawSqliteArchives, OPENCLAW_DATABASE_NAME } from '../parser/openclaw-sqlite';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
@@ -59,6 +61,8 @@ export interface DiscoveredSource {
   sessionCount: number;
   lastSyncAt?: string;
   error?: string;
+  warning?: string;
+  unsupportedArchiveCount?: number;
 }
 
 // ============================================================================
@@ -176,11 +180,28 @@ async function discoverSingleOpenClawDir(agentsDir: string): Promise<DiscoveredS
     const agentDirs = await fs.readdir(agentsDir);
 
     for (const agentDir of agentDirs) {
+      const sqliteSessionIds = new Set<string>();
+      const dbPath = path.join(agentsDir, agentDir, 'agent', OPENCLAW_DATABASE_NAME);
+      if (fsSync.existsSync(dbPath)) {
+        try {
+          const sessions = await listOpenClawSqliteSessions(dbPath);
+          for (const session of sessions) sqliteSessionIds.add(session.id);
+          const unsupportedArchiveCount = await countOpenClawSqliteArchives(dbPath);
+          sources.push({ type: 'openclaw', path: dbPath, sessionCount: sessions.length,
+            ...(unsupportedArchiveCount > 0 ? { unsupportedArchiveCount,
+              warning: `${unsupportedArchiveCount} OpenClaw SQLite archive payload(s) are not decoded directly; only exported JSONL archives are supported. Cold windows are marked partial.` } : {}),
+          });
+        } catch (error) {
+          sources.push({ type: 'openclaw', path: dbPath, sessionCount: 0,
+            error: error instanceof Error ? error.message : 'Unreadable OpenClaw SQLite database' });
+        }
+      }
       const sessionsPath = path.join(agentsDir, agentDir, 'sessions');
       try {
         await fs.access(sessionsPath);
         const files = await fs.readdir(sessionsPath);
-        const sessionFiles = files.filter((f) => f.endsWith('.jsonl'));
+        const sessionFiles = files.filter((f) => /\.jsonl(?:$|\.(?:deleted\.|reset\.|full\.bak$))/.test(f)
+          && !sqliteSessionIds.has(f.split('.jsonl')[0]));
         sources.push({ type: 'openclaw', path: sessionsPath, sessionCount: sessionFiles.length });
       } catch {
         // Agent has no sessions directory, skip
@@ -266,10 +287,37 @@ export async function discoverCodexSources(dirs?: string[]): Promise<DiscoveredS
 }
 
 // ============================================================================
+/** Command Code hook telemetry and snapshots are not conversation transcripts. */
+export function isCommandCodeTranscript(filePath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fsSync.openSync(filePath, 'r');
+    const buffer = Buffer.alloc(65536);
+    const bytes = fsSync.readSync(fd, buffer, 0, buffer.length, 0);
+    const firstLine = buffer.subarray(0, bytes).toString('utf8').split('\n').find(line => line.trim());
+    if (!firstLine) return false;
+    const header = JSON.parse(firstLine);
+    return header.type === 'session' && typeof header.id === 'string';
+  } catch { return false; }
+  finally { if (fd !== undefined) fsSync.closeSync(fd); }
+}
+
+export async function discoverCommandCodeSources(dirs?: string[]): Promise<DiscoveredSource[]> {
+  const result: DiscoveredSource[] = [];
+  for (const root of dirs ?? getDefaultDirs('commandcode')) {
+    const discovered = await discoverJsonlDirectories('commandcode', root, 'Command Code projects directory not found');
+    for (const source of discovered) {
+      if (source.error) { result.push(source); continue; }
+      const entries = await fs.readdir(source.path);
+      const sessionCount = entries.filter(name => name.endsWith('.jsonl') && isCommandCodeTranscript(path.join(source.path, name))).length;
+      if (sessionCount > 0 || discovered.length === 1) result.push({ ...source, sessionCount });
+    }
+  }
+  return result;
+}
+
 // OpenCode Discovery
 // ============================================================================
-
-const OPENCODE_REQUIRED_TABLES = ['session', 'message', 'part', 'project'] as const;
 
 function resolveOpencodeDbPath(): string {
   const config = getConfig();
@@ -306,7 +354,7 @@ export async function discoverOpencodeSources(dirs?: string[]): Promise<Discover
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = openOpencodeReadonly(dbPath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to open database';
     logger.warn(`[sources] OpenCode DB locked or unreadable: ${dbPath}: ${msg}`);
@@ -314,22 +362,8 @@ export async function discoverOpencodeSources(dirs?: string[]): Promise<Discover
   }
 
   try {
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-      .all() as { name: string }[];
-    const existing = new Set(tables.map((r) => r.name));
-    const missing = OPENCODE_REQUIRED_TABLES.filter((t) => !existing.has(t));
-    if (missing.length > 0) {
-      return [{
-        type: 'opencode',
-        path: dbPath,
-        sessionCount: 0,
-        error: `Schema validation failed: missing tables [${missing.join(', ')}]`,
-      }];
-    }
-
-    const row = db.prepare('SELECT COUNT(*) as cnt FROM session').get() as { cnt: number };
-    return [{ type: 'opencode', path: dbPath, sessionCount: row.cnt }];
+    const schema = inspectOpencodeSchema(db);
+    return [{ type: 'opencode', path: dbPath, sessionCount: listOpencodeSessions(db, schema).length }];
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to query database';
     return [{ type: 'opencode', path: dbPath, sessionCount: 0, error: msg }];
@@ -421,6 +455,8 @@ export async function getSourceConfig(sourceType: TraceSource): Promise<SourceCo
     sources = await discoverOpenClawSources();
   } else if (sourceType === 'claude-code') {
     sources = await discoverClaudeSources();
+  } else if (sourceType === 'commandcode') {
+    sources = await discoverCommandCodeSources();
   } else if (sourceType === 'codex') {
     sources = await discoverCodexSources();
   } else if (sourceType === 'opencode') {

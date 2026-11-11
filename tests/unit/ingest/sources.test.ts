@@ -19,11 +19,11 @@ const dirent = (name: string, kind: 'file' | 'dir') => ({
 
 vi.mock('fs/promises', () => ({
   default: {
-    access: (...args: any[]) => mockAccess(...args),
-    readdir: (...args: any[]) => mockReaddir(...args),
+    access: (...args: unknown[]) => mockAccess(...args),
+    readdir: (...args: unknown[]) => mockReaddir(...args),
   },
-  access: (...args: any[]) => mockAccess(...args),
-  readdir: (...args: any[]) => mockReaddir(...args),
+  access: (...args: unknown[]) => mockAccess(...args),
+  readdir: (...args: unknown[]) => mockReaddir(...args),
 }));
 
 // Mock ingest/config to return predictable toolDirs

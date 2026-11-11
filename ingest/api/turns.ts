@@ -7,6 +7,7 @@
  * @module ingest/api/turns
  */
 
+import { decodeMessageUsage } from '../db/message-usage';
 import { Hono } from 'hono';
 import { getDatabase } from '../db';
 import { assembleTurns, getTurnCount } from '../turns/assembler';
@@ -168,7 +169,7 @@ turnsRoutes.get('/api/v1/sessions/:id/messages', (c) => {
     FROM messages
     WHERE session_id = ?
   `;
-  const params: any[] = [sessionId];
+  const params: unknown[] = [sessionId];
 
   if (role) {
     query += ' AND role = ?';
@@ -180,7 +181,7 @@ turnsRoutes.get('/api/v1/sessions/:id/messages', (c) => {
 
   // Get total count
   let countQuery = 'SELECT COUNT(*) as total FROM messages WHERE session_id = ?';
-  const countParams: any[] = [sessionId];
+  const countParams: unknown[] = [sessionId];
   if (role) {
     countQuery += ' AND role = ?';
     countParams.push(role);
@@ -223,6 +224,7 @@ interface MessageRow {
 // ============================================================================
 
 function parseMessageRow(row: MessageRow) {
+  const storedUsage = decodeMessageUsage(row.token_usage_json);
   return {
     id: row.id,
     ordinal: row.ordinal,
@@ -230,7 +232,8 @@ function parseMessageRow(row: MessageRow) {
     content: row.content,
     timestamp: row.timestamp,
     model: row.model,
-    tokenUsage: row.token_usage_json ? JSON.parse(row.token_usage_json) : null,
+    requestId: storedUsage.requestId,
+    tokenUsage: storedUsage.tokenUsage ?? null,
     sourceMetadata: {
       sourceType: 'openclaw', // TODO: Get from session join in Phase 3
       sourceFile: row.source_file,
