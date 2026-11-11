@@ -188,6 +188,28 @@ describe('request-aware session and overview costs', () => {
     },
   );
 
+  it.each(['source_reported', 'partial'])(
+    'keeps model tokens visible without splitting a %s source cost', async (status) => {
+      seed([
+        { model: haiku, usage: smallUsage('r1') },
+        { model: sonnet, usage: { requestId: 'r2', inputTokens: 2_000, outputTokens: 10 } },
+      ], { cost: 0.42, status });
+      const pricingStatus = status === 'partial' ? 'partial' : 'priced';
+      expect(await get('/api/v1/sessions/session')).toMatchObject({ estimatedCost: 0.42, costPricingStatus: pricingStatus });
+      expect(await get('/api/v1/overview/aggregates?window=all')).toMatchObject({ totalCost: 0.42, pricingStatus });
+      expect((await get('/api/v1/overview/top-projects?window=all')).projects[0]).toMatchObject({ cost: 0.42, pricingStatus });
+      expect((await get('/api/v1/overview/daily-tokens?window=all')).days[0]).toMatchObject({ cost: 0.42, pricingStatus });
+      const models = (await get('/api/v1/overview/top-models?window=all')).models;
+      expect(models).toHaveLength(2);
+      expect(models).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: haiku, inputTokens: 60_000, outputTokens: 1_000, totalTokens: 61_000,
+          sessionCount: 1, cost: null, pricingStatus: 'unknown' }),
+        expect.objectContaining({ name: sonnet, inputTokens: 2_000, outputTokens: 10, totalTokens: 2_010,
+          sessionCount: 1, cost: null, pricingStatus: 'unknown' }),
+      ]));
+    },
+  );
+
   it('persists request identity from distinct Claude UUIDs and bills cumulative snapshots once', async () => {
     const file = join(dir, 'stream.jsonl');
     writeFileSync(file, [100, 1_000, 1_000].map((output, i) => JSON.stringify({

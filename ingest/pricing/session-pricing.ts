@@ -49,7 +49,13 @@ function parseUsage(json: string | null): { usage: Usage; totalTokens: number; r
   } catch { return undefined; }
 }
 
-export function getSessionUsageCosts(database: Database.Database, sessionId: string): PricedSessionUsage[] {
+export function getSessionUsageCosts(
+  database: Database.Database,
+  sessionId: string,
+  // Usage-only mode retains request/model token rows, suppressing both the
+  // reported session total and inferred prices so callers cannot double-count.
+  options?: { usageOnly?: boolean },
+): PricedSessionUsage[] {
   const session = database.prepare(`
     SELECT total_input_tokens, total_output_tokens, total_cache_read_tokens,
       total_cache_write_tokens, total_reasoning_tokens, source_cost_usd, cost_pricing_status
@@ -68,7 +74,7 @@ export function getSessionUsageCosts(database: Database.Database, sessionId: str
   `).all(sessionId) as MessageRow[];
   const models = new Set(messages.map((m) => getCanonicalModelKey(m.model)).filter((m) => m !== null));
   const model = models.size === 1 ? [...models][0] : null;
-  if (session.source_cost_usd !== null) {
+  if (session.source_cost_usd !== null && !options?.usageOnly) {
     return [{ model, day: null, usage: totals, aggregateFallback: true,
       estimate: { cost: session.source_cost_usd, pricingStatus: session.cost_pricing_status === 'partial' ? 'partial' : 'priced' } }];
   }
@@ -99,13 +105,13 @@ export function getSessionUsageCosts(database: Database.Database, sessionId: str
     // Aggregate usage is safe only for one model with a fixed rate. A tiered
     // rate cannot be recovered from session/day totals or a final model name.
     return [{ model, day: null, usage: totals, aggregateFallback: true,
-      estimate: model && !requiresRequestUsage(model) ? estimateModelCost(model, totals) : unknown() }];
+      estimate: !options?.usageOnly && model && !requiresRequestUsage(model) ? estimateModelCost(model, totals) : unknown() }];
   }
   const groupedTotals = emptyUsage();
   const entries: PricedSessionUsage[] = [];
   for (const request of requests.values()) {
     for (const channel of channels) groupedTotals[channel] += request.usage[channel];
-    request.estimate = request.conflictingModel || (requiresRequestUsage(request.model) && !request.hasRequestId)
+    request.estimate = options?.usageOnly || request.conflictingModel || (requiresRequestUsage(request.model) && !request.hasRequestId)
       ? unknown() : estimateModelCost(request.model, request.usage, { round: false });
     entries.push(request);
   }

@@ -117,6 +117,7 @@ function getSessionCostRows(
   db: IngestDatabase,
   whereClause: string,
   params: SqlParam[],
+  byModel = false,
 ): SessionCostRow[] {
   const rows = db.prepare(`
     SELECT
@@ -177,7 +178,7 @@ function getSessionCostRows(
     sourceCostUsd: row.source_cost_usd,
     costPricingStatus: row.cost_pricing_status,
   }));
-  return expandSessionCostRows(db, mapped, false);
+  return expandSessionCostRows(db, mapped, false, byModel);
 }
 
 function getDailyTokenCostRows(
@@ -259,20 +260,29 @@ function expandSessionCostRows(
   db: IngestDatabase,
   rows: SessionCostRow[],
   daily: boolean,
+  byModel = false,
 ): SessionCostRow[] {
   const costsBySession = new Map<string, ReturnType<typeof getSessionUsageCosts>>();
-  return rows.flatMap((row) => {
+  return rows.flatMap<SessionCostRow>((row) => {
     let entries = costsBySession.get(row.id);
     if (!entries) {
-      entries = getSessionUsageCosts(db, row.id);
+      entries = getSessionUsageCosts(db, row.id, { usageOnly: byModel && row.sourceCostUsd != null });
       costsBySession.set(row.id, entries);
     }
     if (row.sourceCostUsd != null) {
-      // A source total has no per-model split; attribute it only when the
-      // transcript identifies one model, rather than assigning it to the last.
-      return [{ ...row, model: entries[0]?.model ?? null,
-        costEstimate: { cost: row.sourceCostUsd,
-          pricingStatus: row.costPricingStatus === 'partial' ? 'partial' as const : 'priced' as const } }];
+      const knownModels = new Set(entries.map((entry) => entry.model).filter((model) => model != null));
+      const oneModel = knownModels.size === 1 && entries.every((entry) => entry.model != null);
+      if (!byModel || oneModel) {
+        // Only a single identified model can own an unsplit source total.
+        return [{ ...row, model: oneModel ? [...knownModels][0] : null,
+          costEstimate: { cost: row.sourceCostUsd,
+            pricingStatus: row.costPricingStatus === 'partial' ? 'partial' as const : 'priced' as const } }];
+      }
+      // Preserve known per-model tokens without inventing a split of a reported
+      // session cost. The total is used once by session/project/daily rollups.
+      return entries.map((entry) => ({ ...row, ...entry.usage, model: entry.model,
+        totalTokens: entry.totalTokens ?? Object.values(entry.usage).reduce((sum, value) => sum + value, 0),
+        sourceCostUsd: null, costEstimate: { cost: null, pricingStatus: 'unknown' as const } }));
     }
     const selected = entries.filter((entry) => !daily || !entry.day || entry.day === row.day);
     if (selected.length === 0) {
@@ -626,7 +636,7 @@ overviewRoutes.get('/api/v1/overview/top-models', (c) => {
     ${whereClause}
   `).get(...params) as { total_tokens: number };
 
-  const costRows = getSessionCostRows(db, whereClause, params);
+  const costRows = getSessionCostRows(db, whereClause, params, true);
   const models = costRows.filter((row) => row.model != null).map((row) => ({
     name: row.model!, sessionId: row.id,
     input_tokens: row.inputTokens, output_tokens: row.outputTokens,
