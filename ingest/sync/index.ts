@@ -3278,6 +3278,7 @@ export function backfillCodexRelationships(
 async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> {
   const { discoverOpencodeSources } = await import('./sources');
   const { parseOpencodeSession, computeOpencodeSkipKey } = await import('../parser/opencode');
+  const { inspectOpencodeSchema, listOpencodeSessions, openOpencodeReadonly, opencodeSessionFingerprint } = await import('../parser/opencode-storage');
 
   const { getConfig } = await import('../config');
   const toolDirs = getConfig().toolDirs;
@@ -3297,7 +3298,7 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
   let ocDb: Database.Database;
 
   try {
-    ocDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+    ocDb = openOpencodeReadonly(dbPath);
   } catch (err) {
     totalResult.errors.push(
       `Failed to open OpenCode DB at ${dbPath}: ${err instanceof Error ? err.message : err}`
@@ -3306,9 +3307,8 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
   }
 
   try {
-    const sessionRows = ocDb.prepare(
-      'SELECT s.*, p.worktree as project_worktree FROM session s LEFT JOIN project p ON s.project_id = p.id ORDER BY s.time_updated DESC'
-    ).all() as (Record<string, unknown> & { project_worktree?: string | null })[];
+    const schema = inspectOpencodeSchema(ocDb);
+    const sessionRows = listOpencodeSessions(ocDb, schema);
 
     if (totalResult.metrics) {
       totalResult.metrics.filesConsidered = sessionRows.length;
@@ -3319,18 +3319,8 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
         const rawSessionId = row.id as string;
         const sessionRow = row as unknown as import('../parser/opencode').OpencodeSessionRow;
 
-        const msgCountRow = ocDb.prepare(
-          'SELECT COUNT(*) as cnt FROM message WHERE session_id = ?'
-        ).get(rawSessionId) as { cnt: number };
-
-        const partCountRow = ocDb.prepare(
-          'SELECT COUNT(*) as cnt FROM part WHERE session_id = ?'
-        ).get(rawSessionId) as { cnt: number };
-
         const skipKey = computeOpencodeSkipKey(
-          sessionRow,
-          msgCountRow.cnt,
-          partCountRow.cnt,
+          sessionRow, 0, 0, opencodeSessionFingerprint(ocDb, row, schema),
         );
 
         const canonicalId = `opencode:${rawSessionId}`;
@@ -3351,6 +3341,10 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
         const projectOverride = (row.project_worktree as string) || (row.directory as string) || undefined;
         const parseResult = await parseOpencodeSession(dbPath, rawSessionId, projectOverride);
 
+        if (parseResult.errors.length) {
+          totalResult.errors.push(...parseResult.errors.map(error => `OpenCode session ${rawSessionId}: ${error.error}`));
+          continue;
+        }
         recordFileParsed(totalResult, 'full');
         parseResult.session.name = parseResult.session.name || extractSessionName(parseResult);
         parseResult.session.project = extractProjectFromParsedSession(parseResult, projectOverride ?? 'default');

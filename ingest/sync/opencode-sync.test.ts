@@ -5,7 +5,7 @@
  * Uses temporary opencode.db and canonical DB instances.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { mkdtempSync, rmSync, mkdirSync } from 'fs';
@@ -15,6 +15,10 @@ import {
   type TestOpencodeSession,
   type TestOpencodeFixture,
 } from '../parser/opencode-test-db.js';
+import Database from 'better-sqlite3';
+import { getConfig } from '../config';
+import { turnsRoutes } from '../api/turns';
+import { createOpencodeV2TestDB } from '../parser/opencode-v2-test-db';
 import { syncSource } from './index.js';
 import { getDatabase, closeDatabase, openDatabase, initSchema } from '../db/index.js';
 
@@ -272,5 +276,68 @@ describe('syncOpencodeSource', () => {
     expect(child).toBeDefined();
     expect(child!.parent_session_id).toBe(`opencode:${parentSessionId}`);
     expect(child!.relationship_type).toBe('subagent');
+  });
+});
+
+
+describe('OpenCode v2 sync integration', () => {
+  afterEach(() => { delete process.env.OPENCODE_DB_PATH; });
+  beforeEach(() => { createCanonicalDB(); });
+
+  it('syncs mixed layouts to searchable messages, turns, tools and relationships, then skips unchanged rows', async () => {
+    const f = track(createOpencodeV2TestDB({ legacy: [{ id: 'legacy-only' }], splitParts: true }));
+    process.env.OPENCODE_DB_PATH = f.dbPath;
+    getConfig().toolDirs.set('opencode', [f.dbPath]);
+    const first = await syncSource('opencode');
+    expect(first.errors).toEqual([]);
+    expect(first.sessionsInserted).toBe(4);
+    const db = getDatabase();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM fts_messages_content WHERE fts_messages_content MATCH 'needle'").get()).toEqual({ n: 1 });
+    const replay = await turnsRoutes.request('/api/v1/sessions/opencode:v2-parent/turns');
+    expect(replay.status).toBe(200);
+    const replayBody = await replay.json();
+    expect(replayBody.turns).toHaveLength(1);
+    expect(replayBody.turns[0].assistantMessages[0].content).toBe('Fixture reply\nInline suffix');
+    expect(replayBody.turns[0].activities.filter((a: { type: string }) => a.type === 'tool_call')).toHaveLength(2);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE session_id='opencode:v2-parent'").get()).toEqual({ n: 2 });
+    expect(db.prepare("SELECT parent_session_id, relationship_type FROM sessions WHERE id='opencode:v2-fork'").get()).toEqual({ parent_session_id: 'opencode:v2-parent', relationship_type: 'fork' });
+    const second = await syncSource('opencode');
+    expect(second.errors).toEqual([]);
+    expect(second.metrics?.filesSkippedBeforeParse).toBe(4);
+
+    // A settled tool updates in place without changing session time or row counts.
+    const source = new Database(f.dbPath);
+    source.prepare("UPDATE session_part SET time_updated=time_updated+10000, data=? WHERE message_id='msg_a' AND ordinal=3").run(JSON.stringify({ type: 'text', text: 'Updated fixture reply' }));
+    source.close();
+    const third = await syncSource('opencode');
+    expect(third.errors).toEqual([]);
+    expect(third.metrics?.filesParsed).toBe(1);
+    expect(db.prepare("SELECT content FROM messages WHERE session_id='opencode:v2-parent' AND role='assistant'").get()).toEqual({ content: 'Updated fixture reply\nInline suffix' });
+    const corrupt = new Database(f.dbPath);
+    corrupt.exec("UPDATE session_message SET data='null', time_updated=time_updated+20000 WHERE id='msg_a'");
+    corrupt.close();
+    expect((await syncSource('opencode')).errors.join(' ')).toContain('Invalid OpenCode message JSON');
+    expect(db.prepare("SELECT content FROM messages WHERE session_id='opencode:v2-parent' AND role='assistant'").get()).toEqual({ content: 'Updated fixture reply\nInline suffix' });
+  });
+
+  it('refreshes an already ingested legacy session after v2 migration with unchanged timestamps', async () => {
+    const f = track(createOpencodeTestDB([{ id: 'v2-parent', title: 'Old title' }]));
+    process.env.OPENCODE_DB_PATH = f.dbPath;
+    getConfig().toolDirs.set('opencode', [f.dbPath]);
+    expect((await syncSource('opencode')).errors).toEqual([]);
+    const v2 = track(createOpencodeV2TestDB());
+    const source = new Database(f.dbPath);
+    source.prepare('ATTACH DATABASE ? AS upgraded').run(v2.dbPath);
+    source.exec(`
+      CREATE TABLE session_v2 AS SELECT * FROM upgraded.session_v2;
+      CREATE TABLE session_message AS SELECT * FROM upgraded.session_message;
+      UPDATE session_v2 SET time_updated=(SELECT time_updated FROM session WHERE id='v2-parent') WHERE id='v2-parent';
+      DETACH DATABASE upgraded;
+    `);
+    source.close();
+    const result = await syncSource('opencode');
+    expect(result.errors).toEqual([]);
+    expect(getDatabase().prepare("SELECT name FROM sessions WHERE id='opencode:v2-parent'").get()).toEqual({ name: 'V2 fixture' });
+    expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id='opencode:v2-parent'").get()).toEqual({ n: 2 });
   });
 });
