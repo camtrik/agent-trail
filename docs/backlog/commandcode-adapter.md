@@ -33,3 +33,5 @@ updated: 2026-11-11
 - `partial` 来源成本由 parser 持久化，总览保留 partial 的共享 pricing 修复由同批 pricing 工作项统一整合。
 - 验证：全量 783 项通过、1 项跳过；根目录与 ingest 两套 tsc 通过；改动 ESLint 无错误（仅既有 assembler 未使用参数警告）；HTTP 验证使用合成数据，ingest → Next BFF sessions/turns → 页面均成功。
 - 待集成验收：浅色/深色实际截图检查未完成。Browser 工具的原生模块被 macOS 签名策略拒绝，备用 CUA 打开 Chrome 超时；新增内容沿用现有语义颜色 token。
+
+- 交叉审查修复：v23 重建期间临时使用 `legacy_alter_table=ON` 与 `foreign_keys=OFF`，保留全局 view、嵌套 view 和其他表 trigger 对原表名的引用，迁移成功或失败后均恢复连接原设置。未删除或改写这些全局依赖；回归覆盖查询/触发结果、两项 pragma 的四种初始组合、外键检查失败后的完整 schema/data 回滚与修正后幂等重试。

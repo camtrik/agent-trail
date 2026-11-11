@@ -84,3 +84,91 @@ it('uses the same source constraints on every fresh canonical table', () => {
   expect(db.pragma('foreign_key_check')).toEqual([]);
   expect(db.pragma('user_version', { simple: true })).toBe(24);
 });
+
+function seedV23GlobalDependents(kind: 'view' | 'cross-table-trigger' | 'both'): void {
+  file = join(tmpdir(), `commandcode-dependents-${randomUUID()}.db`);
+  const seed = new Database(file);
+  seed.exec(readFileSync('ingest/db/schema.sql', 'utf8').replaceAll("'commandcode', ", ''));
+  seed.exec(`
+    CREATE TABLE session_stars (session_id TEXT NOT NULL PRIMARY KEY, starred_at TEXT NOT NULL DEFAULT (datetime('now')));
+    INSERT INTO sessions (id, source, project, status, file_path)
+      VALUES ('existing', 'codex', '/repo', 'active', '/tmp/session.jsonl');
+    PRAGMA user_version=23;
+  `);
+  if (kind === 'view' || kind === 'both') seed.exec(`
+    CREATE VIEW active_source_sessions AS SELECT id FROM sessions WHERE status='active';
+    CREATE VIEW nested_source_sessions AS SELECT id FROM active_source_sessions;
+  `);
+  if (kind === 'cross-table-trigger' || kind === 'both') seed.exec(`
+    CREATE TABLE cross_table_audit (id TEXT);
+    CREATE TRIGGER cross_table_trigger AFTER INSERT ON messages BEGIN
+      INSERT INTO cross_table_audit SELECT id FROM sessions WHERE id=new.session_id;
+    END;
+  `);
+  seed.close();
+}
+
+const dependencySql = (db: Database.Database) => db.prepare(`
+  SELECT type, name, sql FROM sqlite_master
+  WHERE name IN ('active_source_sessions', 'nested_source_sessions', 'cross_table_trigger')
+  ORDER BY name
+`).all();
+
+it.each(['view', 'cross-table-trigger'] as const)(
+  'preserves global %s references through a v23 rebuild and repeat startup',
+  (kind) => {
+    seedV23GlobalDependents(kind);
+    const db = openDatabase({ path: file });
+    db.pragma('foreign_keys=ON');
+    db.pragma('legacy_alter_table=OFF');
+    const definitions = dependencySql(db);
+
+    initSchema();
+    expect(db.pragma('user_version', { simple: true })).toBe(24);
+    expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(db.pragma('legacy_alter_table', { simple: true })).toBe(0);
+    expect(dependencySql(db)).toEqual(definitions);
+    if (kind === 'view') {
+      expect(db.prepare('SELECT * FROM nested_source_sessions').all()).toEqual([{ id: 'existing' }]);
+    } else {
+      db.prepare("INSERT INTO messages (id, session_id, ordinal, role, content) VALUES ('after', 'existing', 0, 'user', 'after migration')").run();
+      expect(db.prepare('SELECT * FROM cross_table_audit').all()).toEqual([{ id: 'existing' }]);
+    }
+    initSchema(); runMigrations();
+    expect(dependencySql(db)).toEqual(definitions);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+  },
+);
+
+it.each([[0, 0], [0, 1], [1, 0], [1, 1]])('restores foreign_keys=%i / legacy_alter_table=%i after failure and safe retry', (foreignKeys, legacy) => {
+  seedV23GlobalDependents('both');
+  const db = openDatabase({ path: file });
+  db.pragma('foreign_keys=OFF');
+  db.exec("INSERT INTO messages (id, session_id, ordinal, role, content) VALUES ('orphan', 'missing', 0, 'user', 'invalid fixture')");
+  db.pragma(`foreign_keys=${foreignKeys}`);
+  db.pragma(`legacy_alter_table=${legacy}`);
+  const schemaBefore = db.prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name').all();
+  const rowsBefore = [...sourceTables, 'messages', 'cross_table_audit'].map(table => db.prepare(`SELECT * FROM ${table}`).all());
+
+  expect(() => runMigrations()).toThrow('Command Code source migration would violate foreign keys');
+  expect(db.pragma('user_version', { simple: true })).toBe(23);
+  expect(db.pragma('foreign_keys', { simple: true })).toBe(foreignKeys);
+  expect(db.pragma('legacy_alter_table', { simple: true })).toBe(legacy);
+  expect(db.prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name').all()).toEqual(schemaBefore);
+  expect([...sourceTables, 'messages', 'cross_table_audit'].map(table => db.prepare(`SELECT * FROM ${table}`).all())).toEqual(rowsBefore);
+  expect(db.prepare('SELECT * FROM nested_source_sessions').all()).toEqual([{ id: 'existing' }]);
+
+  db.prepare("DELETE FROM messages WHERE id='orphan'").run();
+  runMigrations(); runMigrations();
+  expect(db.pragma('user_version', { simple: true })).toBe(24);
+  expect(db.pragma('foreign_keys', { simple: true })).toBe(foreignKeys);
+  expect(db.pragma('legacy_alter_table', { simple: true })).toBe(legacy);
+  expect(dependencySql(db)).toEqual(schemaBefore.filter((row) => {
+    const name = (row as { name: string }).name;
+    return ['active_source_sessions', 'nested_source_sessions', 'cross_table_trigger'].includes(name);
+  }).sort((a, b) => (a as { name: string }).name.localeCompare((b as { name: string }).name)));
+  db.prepare("INSERT INTO messages (id, session_id, ordinal, role, content) VALUES ('retried', 'existing', 0, 'user', 'after retry')").run();
+  expect(db.prepare('SELECT * FROM cross_table_audit').all()).toEqual([{ id: 'existing' }]);
+  expect(db.pragma('foreign_key_check')).toEqual([]);
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%_commandcode_new'").all()).toEqual([]);
+});

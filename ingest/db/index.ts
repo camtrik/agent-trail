@@ -768,8 +768,13 @@ export function runMigrations(): void {
 
 function widenCommandCodeSourceConstraints(database: Database.Database): void {
   const foreignKeys = database.pragma('foreign_keys', { simple: true });
-  database.pragma('foreign_keys = OFF');
+  const legacyAlterTable = database.pragma('legacy_alter_table', { simple: true });
   try {
+    database.pragma('foreign_keys = OFF');
+    // Preserve global view/trigger/FK references while the original name is
+    // temporarily absent. The replacement retains every column and final name.
+    // https://www.sqlite.org/pragma.html#pragma_legacy_alter_table
+    database.pragma('legacy_alter_table = ON');
     database.transaction(() => {
       for (const table of ['sessions', 'subagent_links', 'session_token_daily', 'ingest_file_cursors']) {
         const row = database.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table) as { sql: string } | undefined;
@@ -787,7 +792,11 @@ function widenCommandCodeSourceConstraints(database: Database.Database): void {
       if (Array.isArray(violations) && violations.length > 0) throw new Error('Command Code source migration would violate foreign keys');
     })();
   } finally {
-    database.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+    try {
+      database.pragma(`legacy_alter_table = ${legacyAlterTable ? 'ON' : 'OFF'}`);
+    } finally {
+      database.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+    }
   }
 }
 
