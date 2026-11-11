@@ -135,7 +135,7 @@ const publishedPkg = {
   name: PACKAGE_NAME,
   version,
   description:
-    "Local AI coding agent observability dashboard for Claude Code, Codex, OpenCode, OpenClaw, and Qoder. Track token usage, estimated cost, tool calls, subagent trees, and replay full sessions from local JSONL/SQLite files — no cloud, no telemetry.",
+    "Local AI coding agent observability dashboard for Claude Code, Codex, OpenCode, OpenClaw, Qoder, and Command Code. Track token usage, estimated cost, tool calls, subagent trees, and replay full sessions from local JSONL/SQLite files — no cloud, no telemetry.",
   keywords: [
     "ai-agents",
     "coding-agents",
@@ -144,6 +144,7 @@ const publishedPkg = {
     "opencode",
     "openclaw",
     "qoder",
+    "commandcode",
     "llm",
     "llmops",
     "dashboard",

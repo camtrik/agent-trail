@@ -192,7 +192,7 @@ Agent Trail is useful if you are:
 
 Source development uses Node.js 24, pnpm 11.1.3, frontend port 3029, and ingest port 8078. npm/Docker use frontend port 3030. Configure INGEST_PORT in the parent shell so both services inherit it.
 
-See the [compatibility matrix](docs/en-US/COMPATIBILITY.md) for verified formats, current storage limits, and reindexing. This maintenance batch is unreleased; installed v0.1.7 packages do not include these changes.
+See the [compatibility matrix](docs/en-US/COMPATIBILITY.md) for verified formats, current storage limits, and reindexing. This maintenance batch targets v0.2.0; upgrade existing v0.1.7 installations to receive these changes.
 
 Project-authored source, documentation and brand assets are covered by the [MIT License](LICENSE). Third-party dependencies retain their own licenses.
 
