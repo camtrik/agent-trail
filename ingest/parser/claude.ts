@@ -1222,6 +1222,7 @@ function parseMessage(
     content,
     timestamp: parsed.timestamp,
     model: msg.model,
+    requestId: msg.id,
     tokenUsage: normalizeClaudeTokenUsage(msg.usage, msg.id),
     sourceMetadata,
   };

@@ -7,6 +7,7 @@
  * @module ingest/api/turns
  */
 
+import { decodeMessageUsage } from '../db/message-usage';
 import { Hono } from 'hono';
 import { getDatabase } from '../db';
 import { assembleTurns, getTurnCount } from '../turns/assembler';
@@ -223,6 +224,7 @@ interface MessageRow {
 // ============================================================================
 
 function parseMessageRow(row: MessageRow) {
+  const storedUsage = decodeMessageUsage(row.token_usage_json);
   return {
     id: row.id,
     ordinal: row.ordinal,
@@ -230,7 +232,8 @@ function parseMessageRow(row: MessageRow) {
     content: row.content,
     timestamp: row.timestamp,
     model: row.model,
-    tokenUsage: row.token_usage_json ? JSON.parse(row.token_usage_json) : null,
+    requestId: storedUsage.requestId,
+    tokenUsage: storedUsage.tokenUsage ?? null,
     sourceMetadata: {
       sourceType: 'openclaw', // TODO: Get from session join in Phase 3
       sourceFile: row.source_file,

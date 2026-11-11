@@ -7,10 +7,12 @@ import { randomUUID } from 'crypto';
 import { openDatabase, initSchema, closeDatabase, getDatabase } from '@/ingest/db';
 import { sessionsRoutes } from '@/ingest/api/sessions';
 import { overviewRoutes } from '@/ingest/api/overview';
+import { turnsRoutes } from '@/ingest/api/turns';
 import { getSessionUsageCosts, estimateSessionCost } from './session-pricing';
 import { parseClaudeSession, parseClaudeSessionAppend } from '@/ingest/parser/claude';
 import { writeSessionToDatabase } from '@/ingest/sync';
 import type { TokenUsage } from '@/types/trace';
+import { decodeMessageUsage } from '@/ingest/db/message-usage';
 
 interface Request {
   model: string;
@@ -35,6 +37,7 @@ describe('request-aware session and overview costs', () => {
     app = new Hono();
     app.route('/', sessionsRoutes);
     app.route('/', overviewRoutes);
+    app.route('/', turnsRoutes);
   });
   afterEach(() => {
     closeDatabase(); rmSync(dir, { recursive: true, force: true });
@@ -198,7 +201,7 @@ describe('request-aware session and overview costs', () => {
       expect(await get('/api/v1/sessions/session')).toMatchObject({ estimatedCost: 0.42, costPricingStatus: pricingStatus });
       expect(await get('/api/v1/overview/aggregates?window=all')).toMatchObject({ totalCost: 0.42, pricingStatus });
       expect((await get('/api/v1/overview/top-projects?window=all')).projects[0]).toMatchObject({ cost: 0.42, pricingStatus });
-      expect((await get('/api/v1/overview/daily-tokens?window=all')).days[0]).toMatchObject({ cost: 0.42, pricingStatus });
+      expect((await get('/api/v1/overview/daily-tokens?window=all')).days[0]).toMatchObject({ cost: null, pricingStatus: 'unknown' });
       const models = (await get('/api/v1/overview/top-models?window=all')).models;
       expect(models).toHaveLength(2);
       expect(models).toEqual(expect.arrayContaining([
@@ -209,6 +212,98 @@ describe('request-aware session and overview costs', () => {
       ]));
     },
   );
+
+  it('allocates exact reported request costs by date instead of token proportions, with duplicate snapshots', async () => {
+    seed([
+      { model: haiku, timestamp: firstDay, usage: { requestId: 'r1', inputTokens: 100, outputTokens: 0, sourceCostUsd: 1 } },
+      { model: haiku, timestamp: secondDay, usage: { requestId: 'r1', inputTokens: 100, outputTokens: 0, sourceCostUsd: 1 } },
+      { model: sonnet, timestamp: secondDay, usage: { requestId: 'r2', inputTokens: 100, outputTokens: 0, sourceCostUsd: 0.01 } },
+    ], { cost: 1.01, status: 'priced' });
+    getDatabase().exec("UPDATE sessions SET source='commandcode'; UPDATE session_token_daily SET source='commandcode';");
+    expect((await get('/api/v1/overview/daily-tokens?window=all')).days).toEqual([
+      expect.objectContaining({ cost: 1, pricingStatus: 'priced' }),
+      expect.objectContaining({ cost: 0.01, pricingStatus: 'priced' }),
+    ]);
+    expect(await get('/api/v1/overview/aggregates?window=all')).toMatchObject({ totalCost: 1.01, pricingStatus: 'priced' });
+    expect(await get('/api/v1/sessions/session')).toMatchObject({ estimatedCost: 1.01 });
+    expect((await get('/api/v1/overview/top-models?window=all')).models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: haiku, cost: 1, pricingStatus: 'priced' }),
+      expect.objectContaining({ name: sonnet, cost: 0.01, pricingStatus: 'priced' }),
+    ]));
+  });
+
+  it('keeps missing per-request source costs partial and preserves the authoritative session total', async () => {
+    seed([
+      { model: haiku, timestamp: firstDay, usage: { inputTokens: 100, outputTokens: 0, sourceCostUsd: 1 } },
+      { model: sonnet, timestamp: secondDay, usage: { inputTokens: 100, outputTokens: 0 } },
+    ], { cost: 1.01, status: 'partial' });
+    expect((await get('/api/v1/overview/daily-tokens?window=all')).days).toEqual([
+      expect.objectContaining({ cost: 1, pricingStatus: 'partial' }),
+      expect.objectContaining({ cost: null, pricingStatus: 'unknown' }),
+    ]);
+    expect(await get('/api/v1/overview/aggregates?window=all')).toMatchObject({ totalCost: 1.01, pricingStatus: 'partial' });
+  });
+
+  it('does not duplicate undated reported costs across days or accept costs exceeding the session total', async () => {
+    seed([
+      { model: haiku, timestamp: firstDay, usage: { inputTokens: 100, outputTokens: 0, sourceCostUsd: 1 } },
+      { model: sonnet, timestamp: secondDay, usage: { inputTokens: 100, outputTokens: 0, sourceCostUsd: 0.01 } },
+    ], { cost: 1.01, status: 'priced' });
+    getDatabase().prepare('UPDATE messages SET timestamp=NULL WHERE ordinal=0').run();
+    expect((await get('/api/v1/overview/daily-tokens?window=all')).days).toEqual([
+      expect.objectContaining({ cost: null, pricingStatus: 'unknown' }),
+      expect.objectContaining({ cost: 0.01, pricingStatus: 'partial' }),
+    ]);
+    getDatabase().prepare('UPDATE sessions SET source_cost_usd=0.5').run();
+    expect((await get('/api/v1/overview/daily-tokens?window=all')).days.every((day: { cost: number | null }) => day.cost === null)).toBe(true);
+  });
+
+  it('marks a separate assistant without usage partial even when stored token totals match the known request', async () => {
+    seed([{ model: haiku, usage: smallUsage('known') }, { model: haiku }]);
+    expect(await get('/api/v1/sessions/session')).toMatchObject({ estimatedCost: 0.0065, costPricingStatus: 'partial' });
+    expect(await get('/api/v1/overview/aggregates?window=all')).toMatchObject({ totalCost: 0.0065, pricingStatus: 'partial' });
+    expect((await get('/api/v1/overview/daily-tokens?window=all')).days[0]).toMatchObject({ cost: 0.0065, pricingStatus: 'partial' });
+  });
+
+  it('persists identity-only Claude blocks without zero-token usage or extra missing requests', async () => {
+    const file = join(dir, 'identity-only.jsonl');
+    writeFileSync(file, [
+      { uuid: 'u1', type: 'assistant', timestamp: firstDay, message: { id: 'same', role: 'assistant', model: haiku, content: 'first', usage: { input_tokens: 60_000, output_tokens: 1_000 } } },
+      { uuid: 'u2', type: 'assistant', timestamp: firstDay, message: { id: 'same', role: 'assistant', model: haiku, content: 'second' } },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+    const parsed = await parseClaudeSession(file, 'test');
+    expect(parsed.messages[1]).toMatchObject({ requestId: 'same' });
+    expect(parsed.messages[1].tokenUsage).toBeUndefined();
+    expect(writeSessionToDatabase(parsed, getDatabase(), file).errors).toEqual([]);
+    const row = getDatabase().prepare('SELECT token_usage_json FROM messages WHERE ordinal=1').get() as { token_usage_json: string };
+    expect(JSON.parse(row.token_usage_json)).toEqual({ requestId: 'same' });
+    expect(decodeMessageUsage(row.token_usage_json)).toMatchObject({ requestId: 'same', tokenUsage: undefined });
+    const messageResponse = await get(`/api/v1/sessions/${parsed.session.id}/messages`);
+    expect(messageResponse.messages[1]).toMatchObject({ requestId: 'same', tokenUsage: null });
+    expect(estimateSessionCost(getDatabase(), parsed.session.id)).toMatchObject({ cost: 0.0065, pricingStatus: 'priced' });
+    getDatabase().prepare('UPDATE messages SET token_usage_json=? WHERE ordinal=1').run(JSON.stringify({ requestId: 'different' }));
+    expect(estimateSessionCost(getDatabase(), parsed.session.id)).toMatchObject({ cost: 0.0065, pricingStatus: 'partial' });
+  });
+
+  it.each(['priced', 'partial'])('infers zero per-model prices only for a complete zero source total (%s)', async (status) => {
+    seed([{ model: haiku, usage: { ...smallUsage('r1'), sourceCostUsd: 0 } }, { model: sonnet, usage: { ...smallUsage('r2'), sourceCostUsd: 0 } }], { cost: 0, status });
+    const expected = status === 'partial' ? { cost: null, pricingStatus: 'unknown' } : { cost: 0, pricingStatus: 'priced' };
+    expect((await get('/api/v1/overview/top-models?window=all')).models).toEqual([
+      expect.objectContaining(expected), expect.objectContaining(expected),
+    ]);
+  });
+
+  it('rounds legacy aggregate estimates after summing sessions', async () => {
+    seed([{ model: sonnet }], { input: 0, output: 0 });
+    getDatabase().prepare('UPDATE messages SET model=?').run('claude-haiku-4.5');
+    getDatabase().prepare('UPDATE sessions SET total_cache_read_tokens=1,total_tokens=1').run();
+    for (let i = 0; i < 9; i++) {
+      getDatabase().prepare(`INSERT INTO sessions(id,source,project,status,file_path,total_cache_read_tokens,total_tokens)
+        VALUES(?, 'claude-code','/project','idle','/old.jsonl',1,1)`).run(`tiny-${i}`);
+      getDatabase().prepare(`INSERT INTO messages(id,session_id,ordinal,role,content,model) VALUES(?,?,0,'assistant','','claude-haiku-4.5')`).run(`tiny-message-${i}`, `tiny-${i}`);
+    }
+    expect(await get('/api/v1/overview/aggregates?window=all')).toMatchObject({ totalCost: 0.000001, pricingStatus: 'priced' });
+  });
 
   it('persists request identity from distinct Claude UUIDs and bills cumulative snapshots once', async () => {
     const file = join(dir, 'stream.jsonl');
