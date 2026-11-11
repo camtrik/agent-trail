@@ -3000,7 +3000,11 @@ export async function syncPaths(
   }
 
   if (sourceType === 'openclaw') {
-    totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(), paths));
+    try {
+      totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(), paths));
+    } catch (error) {
+      totalResult.errors.push(`OpenClaw relationship backfill failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   upsertSyncStatus(sourceType, totalResult);
@@ -3066,8 +3070,12 @@ async function syncOpenClawSource(opts: SyncSourceOptions): Promise<SyncResult> 
   } catch (error) {
     totalResult.errors.push(`Failed to collect OpenClaw sessions: ${error}`);
   }
-  totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(),
-    sources.filter((source) => !source.error).map((source) => source.path)));
+  try {
+    totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(),
+      sources.filter((source) => !source.error).map((source) => source.path)));
+  } catch (error) {
+    totalResult.errors.push(`OpenClaw relationship backfill failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   sseManager.emit('sync_complete', { source: 'openclaw', sessionsInserted: totalResult.sessionsInserted,
     sessionsUpdated: totalResult.sessionsUpdated, errors: totalResult.errors.length });
   return totalResult;
