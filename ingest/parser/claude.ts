@@ -133,6 +133,13 @@ function addUsageToDelta(delta: IncrementalParseDelta, usage?: TokenUsage): void
       + (usage.reasoningTokens ?? 0));
 }
 
+/**
+ * Request snapshots Claude Code writes next to transcript lines. They repeat
+ * earlier turns (duplicating tool_use ids) and carry no uuid, so they must not
+ * become messages or tool calls.
+ */
+const SKIPPED_RECORD_TYPES = new Set(['api-request-blob', 'api-request']);
+
 // ============================================================================
 // Main Parser Entry Point
 // ============================================================================
@@ -220,6 +227,7 @@ export async function parseClaudeSession(
 
     try {
       const parsed: ClaudeJsonlLine = JSON.parse(line);
+      if (SKIPPED_RECORD_TYPES.has(parsed.type)) continue;
 
       if (typeof parsed.cwd === 'string' && parsed.cwd.trim()) {
         sessionCwd = parsed.cwd;
@@ -647,6 +655,7 @@ export async function parseClaudeSessionAppend(
 
     try {
       const parsed: ClaudeJsonlLine = JSON.parse(line);
+      if (SKIPPED_RECORD_TYPES.has(parsed.type)) continue;
 
       if (typeof parsed.cwd === 'string' && parsed.cwd.trim()) {
         sessionCwd = parsed.cwd;

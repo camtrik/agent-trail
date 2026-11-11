@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -148,6 +148,40 @@ describe('Claude incremental parser', () => {
     writeFileSync(filePath, content);
     return filePath;
   }
+
+  it.each(['api-request-blob', 'api-request'])(
+    'ignores appended %s snapshots of existing messages',
+    async (snapshotType) => {
+      const rows = readFileSync(
+        join(process.cwd(), 'tests/fixtures/real-shape/claude/request-blob.jsonl'),
+        'utf8'
+      ).trim().split('\n').map((line) => JSON.parse(line));
+      const history = rows.slice(0, 2).map((row) => JSON.stringify(row)).join('\n') + '\n';
+      const appended = rows.slice(2).map((row) => JSON.stringify(
+        row.type === 'api-request-blob' ? { ...row, type: snapshotType } : row
+      )).join('\n') + '\n';
+      const filePath = writeJsonl('request-snapshot.jsonl', history + appended);
+
+      const delta = await parseClaudeSessionAppend(filePath, 'fixture', {
+        ...baseOptions(),
+        startOffset: Buffer.byteLength(history),
+        endOffset: statSync(filePath).size,
+        startLine: 2,
+        startOrdinal: 2,
+        startTurnIndex: 0,
+        currentTurnId: 'turn-0',
+        knownToolCallIds: ['toolu_rs02'],
+      });
+
+      expect(delta.requiresFullReparse).toBeFalsy();
+      expect(delta.errors).toEqual([]);
+      expect(delta.toolCalls).toEqual([]);
+      expect(delta.messages).toHaveLength(1);
+      expect(delta.messages[0].role).toBe('tool_result');
+      expect(delta.toolResultEvents).toHaveLength(1);
+      expect(delta.cursorUpdate.lastIndexedLine).toBe(5);
+    }
+  );
 
   function baseOptions(): IncrementalParseOptions {
     return {

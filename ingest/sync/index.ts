@@ -19,7 +19,7 @@ import { sseManager } from '../src/sse';
 import { logger } from '../logger';
 import type { TokenUsage } from '@/types/trace';
 
-export const PARSER_CACHE_VERSION = 'parser-v13-local-timezone-rollups';
+export const PARSER_CACHE_VERSION = 'parser-v14-skip-api-request-blobs';
 
 const claudeProjectPathCache = new Map<string, string | null>();
 
@@ -2490,7 +2490,19 @@ async function parseFullCandidate(
     recordFileParsed(totalResult, 'full');
     parseResult.session.name = extractSessionName(parseResult);
     parseResult.session.project = extractProjectFromParsedSession(parseResult, candidate.project);
+    if (parseResult.errors.length > 0) {
+      logger.warn(
+        `[sync:claude-code] ${parseResult.errors.length} parse error(s) in ${filePath}:`,
+        parseResult.errors.slice(0, 5).map((e) => `line ${e.line}: ${e.error}`)
+      );
+    }
     const writeResult = writeSessionToDatabase(parseResult, undefined, filePath, { force: opts.force });
+    if (writeResult.errors.length > 0) {
+      logger.error(
+        `[sync:claude-code] DB write failed, session not stored: ${filePath}:`,
+        writeResult.errors.slice(0, 5)
+      );
+    }
     if (writeResult.errors.length === 0) {
       const database = getDatabase();
       updateCursorAfterFullParse(database, sourceType, filePath, parseResult, fallbackReason);

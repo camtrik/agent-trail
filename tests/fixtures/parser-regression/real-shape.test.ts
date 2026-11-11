@@ -219,3 +219,22 @@ describe('Codex parser — real-shape reasoning and web_search_call', () => {
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('Claude parser — api-request-blob lines are ignored', () => {
+  const fixturePath = path.join(FIXTURE_DIR, 'claude/request-blob.jsonl');
+
+  it('produces one tool_call per tool_use id even when a blob repeats it', async () => {
+    const result = await parseClaudeSession(fixturePath, 'test');
+    const toolCallIds = result.activities
+      .filter(a => a.type === 'tool_call')
+      .map(a => (a as { id: string }).id);
+    expect(toolCallIds).toEqual(['toolu_rs02']);
+  });
+
+  it('does not create messages from blob records (no system or extra user turns)', async () => {
+    const result = await parseClaudeSession(fixturePath, 'test');
+    expect(result.messages.some(m => m.role === 'system')).toBe(false);
+    expect(result.messages.filter(m => m.isRealUserInput).length).toBe(1);
+    expect(result.messages.length).toBe(3);
+  });
+});
