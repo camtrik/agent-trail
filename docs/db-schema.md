@@ -1,5 +1,6 @@
 # 数据库 Schema 参考
 
+当前 schema 版本为 **24**。下文迁移表为历史摘要；完整结构以 `ingest/db/schema.sql` 与 `runMigrations()` 为准。v24 扩展 Command Code source 约束并保留数据、索引、trigger 与外键；token usage JSON 可含 requestId/sourceCostUsd，不需要新增列。
 SQLite 读取模型，位于 `data/ingest.db`。由 ingest 服务（`ingest/db/`）管理。使用 WAL 模式以支持并发读写。
 
 ---
@@ -25,7 +26,7 @@ SQLite 读取模型，位于 `data/ingest.db`。由 ingest 服务（`ingest/db/`
 | Column | Type | Constraints | Description |
 | --- | --- | --- | --- |
 | `id` | TEXT | **PK** | Session ID（例如 Claude Code 为 UUID，OpenClaw 为 `agent:{name}:{uuid}`） |
-| `source` | TEXT | NOT NULL, CHECK IN (`openclaw`, `claude-code`, `codex`, `opencode`) | 产生此 session 的 agent 工具 |
+| `source` | TEXT | NOT NULL, CHECK IN (`openclaw`, `claude-code`, `codex`, `opencode`, `qoder`, `commandcode`) | 产生此 session 的 agent 工具 |
 | `project` | TEXT | NOT NULL | 解码后的 project/cwd 路径 |
 | `name` | TEXT | nullable | 从第一条用户消息中提取的显示名称 |
 | `started_at` | TEXT | nullable | 第一条消息的 ISO 8601 时间戳 |
@@ -261,7 +262,7 @@ sessions (1) ──< (N) messages
 ## 生命周期
 
 1. **启动：** `openDatabase()` 创建目录，打开 SQLite，启用 WAL
-2. **初始化：** `initSchema()` 执行 `schema.sql` → `runMigrations()` → 验证全部 6 张表存在
+2. **初始化：** `initSchema()` 执行 `schema.sql` → `runMigrations()` → 验证所有核心表存在
 3. **运行时：** `writeSessionToDatabase()` 执行事务写入；`assembleTurns()` 执行读取查询
 4. **关闭：** `closeDatabase()` 干净地关闭连接
 

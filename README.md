@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md)
 
-**A local AI coding agent observability dashboard for Claude Code, Codex, OpenCode, OpenClaw, and Qoder.**
+**A local AI coding agent observability dashboard for Claude Code, Codex, OpenCode, OpenClaw, Qoder, and Command Code.**
 
 Track token usage, estimated cost, tool calls, subagent trees, and replay full coding-agent sessions from local JSONL / SQLite files.
 
@@ -114,7 +114,7 @@ Open [http://localhost:3030](http://localhost:3030). Mount additional agent dire
 
 ```bash
 pnpm install
-pnpm dev       # starts Next.js (3000) + ingest service (8078)
+pnpm dev       # starts Next.js (3029) + ingest service (8078)
 ```
 
 See [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) for full setup and environment variable reference.
@@ -169,10 +169,11 @@ docker image rm ghcr.io/camtrik/agent-trail:latest
 | Agent                 | Source files                              | Notes                                     |
 | --------------------- | ----------------------------------------- | ----------------------------------------- |
 | **Claude Code** | `~/.claude/projects/**/*.jsonl`         | Full tool-call and subagent replay        |
-| **OpenClaw**    | `~/.openclaw/agents/*/sessions/*.jsonl` | Gateway live view + file ingest           |
+| **OpenClaw** | `~/.openclaw/agents/*/agent/openclaw-agent.sqlite` + archive JSONL | Active SQLite and legacy archives |
 | **Codex**       | `~/.codex/sessions/**/*.jsonl`          | Parent-child session tree                 |
-| **OpenCode**    | `~/.local/share/opencode/opencode.db`   | SQLite source                             |
-| **Qoder**       | local cache DB                            | Token counts (cost excluded from rollups) |
+| **OpenCode** | `~/.local/share/opencode/opencode.db` | Legacy and v2 SQLite schemas |
+| **Qoder** | Legacy IDE local cache DB | Current IDE/Desktop/CLI compatibility still needs validation |
+| **Command Code** | `~/.commandcode/projects/**/*.jsonl` | V3 history and recorded cost; child traces may be unavailable |
 
 ---
 
@@ -185,6 +186,16 @@ Agent Trail is useful if you are:
 - Tracking LLM **token usage and estimated cost** across multiple agents locally
 - Analyzing which sessions or projects consumed the most tokens
 - Debugging expensive or failed AI coding agent runs
+---
+
+## Compatibility and license
+
+Source development uses Node.js 24, pnpm 11.1.3, frontend port 3029, and ingest port 8078. npm/Docker use frontend port 3030. Configure INGEST_PORT in the parent shell so both services inherit it.
+
+See the [compatibility matrix](docs/en-US/COMPATIBILITY.md) for verified formats, current storage limits, and reindexing. This maintenance batch is unreleased; installed v0.1.7 packages do not include these changes.
+
+Project-authored source, documentation and brand assets are covered by the [MIT License](LICENSE). Third-party dependencies retain their own licenses.
+
 ---
 
 ## Privacy

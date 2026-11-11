@@ -1,5 +1,6 @@
 # Database Schema Reference
 
+Current schema version is **24**. The table below is a historical summary; `ingest/db/schema.sql` and `runMigrations()` are authoritative. V24 widens source constraints for Command Code while retaining rows, indexes, triggers and foreign keys. Token usage JSON may include requestId and sourceCostUsd; neither requires a new column.
 SQLite read model at `data/ingest.db`. Managed by the ingest service (`ingest/db/`). Uses WAL mode for concurrent read/write.
 
 ---
@@ -25,7 +26,7 @@ One row per session file. Contains metadata, file provenance, metrics, and relat
 | Column | Type | Constraints | Description |
 | --- | --- | --- | --- |
 | `id` | TEXT | **PK** | Session ID (e.g. UUID for Claude Code, `agent:{name}:{uuid}` for OpenClaw) |
-| `source` | TEXT | NOT NULL, CHECK IN (`openclaw`, `claude-code`, `codex`, `opencode`) | Which agent tool produced this session |
+| `source` | TEXT | NOT NULL, CHECK IN (`openclaw`, `claude-code`, `codex`, `opencode`, `qoder`, `commandcode`) | Which agent tool produced this session |
 | `project` | TEXT | NOT NULL | Decoded project/cwd path |
 | `name` | TEXT | nullable | Display name extracted from first user message |
 | `started_at` | TEXT | nullable | ISO 8601 timestamp of first message |
@@ -156,7 +157,7 @@ Per-source sync health tracking. One row per source type.
 
 | Column | Type | Constraints | Description |
 | --- | --- | --- | --- |
-| `source_type` | TEXT | **PK** | Source type (`openclaw`, `claude-code`, `codex`, `opencode`) |
+| `source_type` | TEXT | **PK** | Source type (`openclaw`, `claude-code`, `codex`, `opencode`, `qoder`, `commandcode`) |
 | `last_full_sync_at` | TEXT | nullable | Timestamp of last full resync |
 | `last_watch_sync_at` | TEXT | nullable | Timestamp of last file-watcher-triggered sync |
 | `files_watched` | INTEGER | NOT NULL, DEFAULT 0 | Number of session files processed |
@@ -261,7 +262,7 @@ Migrations use `ALTER TABLE ADD COLUMN` wrapped in try/catch to handle already-a
 ## Lifecycle
 
 1. **Boot:** `openDatabase()` creates directory, opens SQLite, enables WAL
-2. **Init:** `initSchema()` executes `schema.sql` → `runMigrations()` → verifies all 6 tables exist
+2. **Init:** `initSchema()` executes `schema.sql` → `runMigrations()` → verifies all core tables exist
 3. **Runtime:** `writeSessionToDatabase()` performs transactional writes; `assembleTurns()` performs read queries
 4. **Shutdown:** `closeDatabase()` cleanly closes the connection
 

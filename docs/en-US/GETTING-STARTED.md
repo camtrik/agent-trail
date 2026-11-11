@@ -8,15 +8,15 @@ This guide takes a fresh checkout to a working dashboard with at least one sourc
 
 ## 1. Prerequisites
 
-- **Node.js 20 or newer.** `node --version` should print `v20.x.y` or higher. The project's `tsconfig.json` targets ES2017 but `better-sqlite3` requires Node 20+ on Apple Silicon to avoid prebuild issues.
-- **pnpm 9+.** Use pnpm — `pnpm-lock.yaml` is the source of truth. `corepack enable && corepack prepare pnpm@latest --activate` works on a fresh machine.
+- **Node.js 24 recommended.** Development, CI and Docker are verified with Node 24; native SQLite may need a compiler when a matching prebuild is unavailable.
+- **pnpm 11.1.3.** Use pnpm — `pnpm-lock.yaml` is the source of truth. `corepack enable && corepack prepare pnpm@11.1.3 --activate` works on a fresh machine.
 - **A platform with native `better-sqlite3`.** macOS (arm64/x64), Linux, and Windows all have prebuilds. If `pnpm install` rebuilds it from source, you need a working C/C++ toolchain.
 - **At least one source directory** (otherwise the dashboard will load with empty source lists):
   - OpenClaw: a `~/.openclaw/agents/<agent-name>/sessions/*.jsonl` tree (or your own location pointed at by `OPENCLAW_DIR`).
   - Claude Code: `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` (Claude Code creates these automatically when you run sessions).
   - Codex: `~/.codex/sessions/*.jsonl`.
 
-You don't need all three. The dashboard will show only the sources it can find.
+You do not need every supported source; see [COMPATIBILITY.md](COMPATIBILITY.md) for all formats and limits. The dashboard will show only the sources it can find.
 
 ---
 
@@ -36,27 +36,27 @@ pnpm install
 
 Tool directories are resolved through a three-layer config (highest priority first): **environment variables** > **config file** > **built-in defaults**.
 
-### Option A: Environment variables (`.env.local`)
+### Option A: Environment variables (parent shell)
 
-Create `.env.local` in the repo root:
+Export settings in the shell that launches both services. Only Next.js loads `.env.local`; the separate ingest process does not:
 
 ```bash
-# .env.local — only set the lines you actually need
+# Shell — only set the lines you actually need
 
 # OpenClaw — only needed if your OpenClaw root is not ~/.openclaw
-# OPENCLAW_DIR=/path/to/openclaw
+# export OPENCLAW_DIR=/path/to/openclaw/agents
 
 # Claude Code — only needed if Claude saves sessions somewhere other than ~/.claude/projects
-# CLAUDE_PROJECTS_DIR=/path/to/claude/projects
+# export CLAUDE_PROJECTS_DIR=/path/to/claude/projects
 
 # Codex — only needed if Codex saves sessions somewhere other than ~/.codex/sessions
-# CODEX_SESSIONS_DIR=/path/to/codex/sessions
+# export CODEX_SESSIONS_DIR=/path/to/codex/sessions
 
 # Optional ingest tuning (defaults are usually fine)
-# INGEST_PORT=8078
-# INGEST_DB_PATH=./data/ingest.db
-# INGEST_STARTUP_SYNC_LIMIT=50
-# INGEST_BACKGROUND_SYNC_ENABLED=true
+# export INGEST_PORT=8078
+# export INGEST_DB_PATH=./data/ingest.db
+# export INGEST_STARTUP_SYNC_LIMIT=50
+# export INGEST_BACKGROUND_SYNC_ENABLED=true
 ```
 
 ### Option B: Config file (`~/.agent-trail/config.json`)
@@ -65,7 +65,7 @@ If you prefer not to create a `.env.local` per project, use the global config fi
 
 ```json
 {
-  "openclaw_dirs": ["/path/to/openclaw"],
+  "openclaw_dirs": ["/path/to/openclaw/agents"],
   "claude_project_dirs": ["/path/to/claude/projects"],
   "codex_sessions_dirs": ["/path/to/codex/sessions"]
 }
@@ -88,7 +88,7 @@ pnpm dev
 `concurrently` brings up both:
 
 - `[INGEST]` (green) — Hono on port 8078
-- `[NEXT]`   (blue)  — Next.js on port 3000 (started with `--webpack`, not Turbopack)
+- `[NEXT]`   (blue)  — Next.js on port 3029 (started with `--webpack`, not Turbopack)
 
 You should see something like:
 
@@ -105,8 +105,8 @@ You should see something like:
 [INGEST]   Warmup sync openclaw: +12 new, ~3 updated
 [INGEST]   Warmup sync claude-code: +50 new, ~0 updated
 [INGEST]   Warmup sync codex: +0 new, ~0 updated
-[NEXT]    ▲ Next.js 16.2.4 (webpack)
-[NEXT]    - Local: http://localhost:3000
+[NEXT]    ▲ Next.js 16.4.6 (webpack)
+[NEXT]    - Local: http://localhost:3029
 [NEXT]    ✓ Ready in 2.4s
 ```
 
@@ -122,7 +122,7 @@ In another terminal:
 
 ```bash
 # 1. Frontend reachable (will redirect /, follow with -L)
-curl -I http://localhost:3000
+curl -I http://localhost:3029
 
 # 2. Ingest health — once warmup finishes, "ready" flips to true
 curl http://localhost:8078/health
@@ -133,10 +133,10 @@ curl http://localhost:8078/api/v1/sources
 # → {"sources":[{"type":"openclaw","path":"...","sessionCount":42,"healthStatus":"configured", ...}, ...]}
 
 # 4. Sessions for a single source via the BFF (no source= needed — the URL segment supplies it)
-curl 'http://localhost:3000/api/agent-tools/claude-code/sessions?limit=3'
+curl 'http://localhost:3029/api/agent-tools/claude-code/sessions?limit=3'
 ```
 
-Open `http://localhost:3000`. You'll be redirected to `/all/dashboard` (the aggregate view). The bottom status bar should read `INGEST · ONLINE`.
+Open `http://localhost:3029`. You'll be redirected to `/all/dashboard` (the aggregate view). The bottom status bar should read `INGEST · ONLINE`.
 
 The header has a source switcher — click `OPENCLAW`, `CLAUDE:CODE`, or `CODEX` to scope the shell to a single tool. Each tool has its own dashboard, sessions list, and (for OpenClaw) activity views. Clicking a session opens the turn-by-turn replay UI under `/[tool]/sessions/[sessionId]`.
 
@@ -152,7 +152,7 @@ data/ingest.db-shm      ← Shared memory file. Same caveat.
 ingest/dist/            ← Production build of ingest (only after pnpm build:ingest).
 ```
 
-The two services are independent processes connected by HTTP + SSE on `localhost:8078` ↔ `localhost:3000`. The frontend never reaches into the database directly. Every UI fetch passes through the BFF (`app/api/agent-tools/[tool]/...`).
+The two services are independent processes connected by HTTP + SSE on `localhost:8078` ↔ `localhost:3029`. The frontend never reaches into the database directly. Every UI fetch passes through the BFF (`app/api/agent-tools/[tool]/...`).
 
 For the full request path from URL to React, see [`DATA-FLOW.md`](DATA-FLOW.md). For the per-service breakdown, see [`services/ingest.md`](services/ingest.md) and [`services/frontend.md`](services/frontend.md).
 
@@ -162,14 +162,14 @@ For the full request path from URL to React, see [`DATA-FLOW.md`](DATA-FLOW.md).
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| `Port 3000 already in use` | Another dev server | `lsof -ti:3000 \| xargs kill` or run `PORT=3001 pnpm dev:next` |
+| `Port 3029 already in use` | Another dev server | `lsof -ti:3029 \| xargs kill` or run `pnpm exec next dev --webpack --port 3031` |
 | `Port 8078 already in use` | Stale ingest from a prior session | `lsof -ti:8078 \| xargs kill`, or set `INGEST_PORT=8079` |
 | "INGEST OFFLINE" in the status bar | Ingest crashed or hasn't started | Check the `[INGEST]` lines for stack traces; restart with `pnpm dev:ingest` |
 | Empty session list for OpenClaw | `OPENCLAW_DIR` wrong, or `~/.openclaw/agents/*/sessions/` is empty | Verify with `curl http://localhost:8078/api/v1/sources/openclaw`; the `path` field in the response is what the discoverer is looking at. Paths are configurable via env vars or `~/.agent-trail/config.json` |
 | Empty session list for Claude Code | Claude saves elsewhere (or hasn't run yet) | `ls ~/.claude/projects/` should show project directories with `.jsonl` files; if not, Claude Code hasn't recorded any sessions |
 | Type errors after pulling | Frontend and ingest share `types/trace.ts` — old build cache | `pnpm typecheck` to confirm; remove `tsconfig.tsbuildinfo` if it lies |
 | Compile storm / 100% CPU on `pnpm dev:next` | Don't switch to Turbopack — keep the `--webpack` flag | See `../../ERRORS_LEARNED.md` for context |
-| Replay shows "NO TURNS" for a session you know has content | File hash matches but the parser cache version is stale | Bump `PARSER_CACHE_VERSION` in `ingest/sync/index.ts`, restart, and re-sync; or run `curl -X POST http://localhost:3000/api/agent-tools/<tool>/sync -H 'content-type: application/json' -d '{"force":true}'` |
+| Replay shows "NO TURNS" for a session you know has content | File hash matches but the parser cache version is stale | Bump `PARSER_CACHE_VERSION` in `ingest/sync/index.ts`, restart, and re-sync; or run `curl -X POST http://localhost:3029/api/agent-tools/<tool>/sync -H 'content-type: application/json' -d '{"force":true}'` |
 
 ---
 

@@ -160,3 +160,7 @@ pnpm vitest tests/unit/bff/sync-route.test.ts
 - 使用单次 `vitest run` 调用（监视模式是面向开发者的）。
 - 同时运行 `pnpm typecheck` 和 `pnpm typecheck:ingest`——它们检查不同的 `tsconfig.json` 文件，能发现跨项目的类型不一致。
 - `RUN_REAL_SESSION_TESTS` 在 CI 中应保持关闭；该套件仅供本地开发者使用。
+
+## PR 检查
+
+`.github/workflows/quality.yml` 使用 Node 24 / pnpm 11.1.3，执行冻结锁文件安装、lint、两项 typecheck、测试和双服务构建。lint 排除生成包、构建产物、worktree 与历史设计稿，仍检查源码错误。

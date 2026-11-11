@@ -35,7 +35,7 @@ agent-trail 通过环境变量和可选的配置文件进行配置。数据源�
 - **默认值：** `~/.openclaw/agents`。
 - **config.json 键：** `openclaw_dirs`（数组，支持多路径）。
 - **读取位置：** `ingest/config/tool-dirs.ts → TOOL_DIR_REGISTRY`。
-- **解析为：** `<dir>/<agent-name>/sessions/*.jsonl`（每个目录下按 agent 分组）。
+- **解析为：** `<dir>/<agent-name>/agent/openclaw-agent.sqlite` 及 `sessions/` 下的 legacy/已导出归档 JSONL。
 - **路径限制：** 发现的路径会通过 `isWithinRoot` 对照解析后的根目录进行校验。任何在根目录之外的路径会被丢弃，并在摄取日志中输出 `[sources] Rejected path outside root: ...`。
 
 ### `CLAUDE_PROJECTS_DIR`
@@ -51,15 +51,19 @@ agent-trail 通过环境变量和可选的配置文件进行配置。数据源�
 - **默认值：** `~/.codex/sessions`。
 - **config.json 键：** `codex_sessions_dirs`（数组，支持多路径）。
 - **读取位置：** `ingest/config/tool-dirs.ts → TOOL_DIR_REGISTRY`。
-- **解析为：** 根目录下任何包含 `.jsonl` 文件的目录（递归）。Codex 的父子关系在同步期间根据 `event_msg.collab_agent_spawn_end` 事件重建。
+- **解析为：** 根目录下任何包含 `.jsonl` 文件的目录（递归）。Codex 的父子关系在同步期间根据 `session_meta` 血缘元数据及 `event_msg.collab_agent_spawn_end` 事件重建。
 
 ### `OPENCODE_DB_PATH`
 
 - **默认值：** `~/.local/share/opencode/opencode.db`。
-- **config.json 键：** `opencode_db_path`（单路径字符串）。
+- **config.json 键：** `opencode_db_paths`（数组）。
 - **读取位置：** `ingest/config/tool-dirs.ts → TOOL_DIR_REGISTRY`。
-- **解析为：** OpenCode 的 SQLite 数据库文件（不是 JSONL 文件目录）。解析器以只读方式打开此数据库，提取 `session`、`message`、`part` 和 `project` 表中的数据。
+- **解析为：** OpenCode 的 SQLite 数据库文件（不是 JSONL 文件目录）。解析器以只读方式打开此数据库，按 schema 读取 legacy `session/message/part` 或 v2 `session_v2/session_message`（含可选 `session_part`），保留 `project` 元数据。
 - **注意：** OpenCode 将会话数据存储在 SQLite 中，而不是 JSONL 文件。此路径指向单个 `.db` 文件。
+
+### `COMMANDCODE_PROJECTS_DIR`
+
+默认 `~/.commandcode/projects`，config.json 键为数组 `commandcode_project_dirs`。只导入 v3 历史 transcript 与标题 sidecar；`~/.commandcode/sessions` 的 hook 遥测不是聊天数据源。限制见 [COMPATIBILITY.md](COMPATIBILITY.md)。
 
 ### `QODER_DB_PATH`
 
@@ -130,7 +134,7 @@ Error: Invalid INGEST_RESYNC_INTERVAL_MS: "1000" must be at least 5000ms
 Error: INGEST_DB_PATH cannot contain ".." (path traversal)
 ```
 
-请在 `.env.local` 中或通过启动 shell 设置它们；如果值错误，服务会在绑定端口之前退出（`pnpm dev` 此时将只显示 `[NEXT]` 前缀继续运行）。
+请在启动两个服务的父 shell 中 export 它们（独立 ingest 不自动加载 `.env.local`）；如果值错误，服务会在绑定端口之前退出（`pnpm dev` 此时将只显示 `[NEXT]` 前缀继续运行）。
 
 ---
 
@@ -141,7 +145,7 @@ Error: INGEST_DB_PATH cannot contain ".." (path traversal)
 | `INGEST_URL` | `http://localhost:8078` | `lib/agent-tools/server-adapter.ts` (`fetchIngest`)；`app/api/agent-tools/[tool]/events/route.ts` | BFF 用于与摄取服务通信的基础 URL。仅服务端使用。 |
 | `NEXT_PUBLIC_API_BASE` | _(无 — 使用时必须设置)_ | 仅在 `.env.local` 中；**源代码中当前无导入**。`CLAUDE.md` 中记录为旧版 OpenClaw 消费者所期望的 HTTP API 端点。 | 当前未被仓库内的代码路径使用；保留以与 OVAO 时代保持向后兼容。 |
 | `NEXT_PUBLIC_GATEWAY_WS` | _(无 — 使用时必须设置)_ | 仅在 `.env.local` 中；**源代码中当前无导入**。`CLAUDE.md` 中记录为 OpenClaw Gateway WebSocket URL。 | 当前未被仓库源代码使用。GatewayBootstrap / WS 客户端未在当前多源前端中连接；该内容保留在 `.planning/` 历史记录中。<!-- VERIFY: 确认 NEXT_PUBLIC_GATEWAY_WS 是否被文档之外的任何部署界面需要 --> |
-| `PORT` | _(Next 默认值 — 通常为 `3000`)_ | Next.js 本身 | 标准 Next 覆盖（例如 `PORT=3001 pnpm dev:next`）。 |
+| `PORT` | npm/Docker `3030`；源码脚本显式 `3029` | CLI / Next.js | 源码自定义端口使用 `pnpm exec next dev --webpack --port 3031`。 |
 
 本地设置期间生成的空 `.env.local` 通常包含以下内容：
 

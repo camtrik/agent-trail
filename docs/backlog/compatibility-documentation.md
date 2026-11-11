@@ -1,11 +1,12 @@
 ---
 type: docs
 title: Update Runtime And Compatibility Documentation
-status: todo
+status: review
 priority: p2
 created: 2026-11-11
-branch:
-worktree:
+branch: chore/compatibility-refresh
+worktree: /Users/ebbi/.codex/worktrees/compatibility-refresh/agents-tracing-dashboard
+updated: 2026-11-11
 ---
 
 ## Description

@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · **日本語**
 
-**Claude Code、Codex、OpenCode、OpenClaw、Qoder に対応したローカル AI コーディングエージェント可観測性ダッシュボード。**
+**Claude Code、Codex、OpenCode、OpenClaw、Qoder、Command Code に対応したローカル AI コーディングエージェント可観測性ダッシュボード。**
 
 ローカルの JSONL / SQLite ファイルからトークン使用量、推定コスト、ツール呼び出し、サブエージェントツリーを追跡し、コーディングエージェントセッションを完全にリプレイ。
 
@@ -114,7 +114,7 @@ docker run --rm -p 127.0.0.1:3030:3030 \
 
 ```bash
 pnpm install
-pnpm dev       # Next.js (3000) + インジェストサービス (8078) を起動
+pnpm dev       # Next.js (3029) + インジェストサービス (8078) を起動
 ```
 
 完全なセットアップと環境変数リファレンスは [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) を参照してください。
@@ -169,10 +169,11 @@ docker image rm ghcr.io/camtrik/agent-trail:latest
 | エージェント             | ソースファイル                                | 備考                                     |
 | ------------------------ | --------------------------------------------- | ---------------------------------------- |
 | **Claude Code**          | `~/.claude/projects/**/*.jsonl`               | 完全なツール呼び出しとサブエージェントリプレイ |
-| **OpenClaw**             | `~/.openclaw/agents/*/sessions/*.jsonl`       | ゲートウェイライブビュー + ファイルインジェスト |
+| **OpenClaw** | `~/.openclaw/agents/*/agent/openclaw-agent.sqlite` + アーカイブ JSONL | 稼働中の SQLite と旧アーカイブ |
 | **Codex**                | `~/.codex/sessions/**/*.jsonl`                | 親子セッションツリー                     |
-| **OpenCode**             | `~/.local/share/opencode/opencode.db`         | SQLite ソース                            |
-| **Qoder**                | ローカルキャッシュ DB                         | トークン数（コストは集計から除外）       |
+| **OpenCode** | `~/.local/share/opencode/opencode.db` | 旧形式と v2 SQLite スキーマ |
+| **Qoder** | 旧 IDE のローカルキャッシュ DB | 現行 IDE/Desktop/CLI は追加検証が必要 |
+| **Command Code** | `~/.commandcode/projects/**/*.jsonl` | v3 履歴と記録コスト。子エージェント内部履歴は復元できない場合あり |
 
 ---
 
@@ -185,6 +186,16 @@ Agent Trail は以下のような場合に役立ちます：
 - 複数のエージェントにわたる **LLM トークン使用量と推定コスト** のローカル追跡
 - 最もトークンを消費したセッションやプロジェクトの分析
 - 高コストまたは失敗した AI コーディングエージェント実行のデバッグ
+---
+
+## 互換性とライセンス
+
+ソース開発は Node.js 24、pnpm 11.1.3、フロントエンド 3029、ingest 8078 を使用します。npm/Docker のフロントエンドは 3030 です。両サービスが継承するよう、INGEST_PORT は親シェルで設定してください。
+
+検証済み形式、保存方式の制限、再インデックス手順は[互換性一覧](docs/en-US/COMPATIBILITY.md)を参照してください。この保守バッチは未公開であり、インストール済み v0.1.7 には含まれません。
+
+プロジェクト独自のソース、文書、ブランド素材には [MIT ライセンス](LICENSE) が適用されます。第三者の依存パッケージには各ライセンスが適用されます。
+
 ---
 
 ## プライバシー
