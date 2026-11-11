@@ -178,8 +178,8 @@ describe('getDefinition', () => {
   it('returns claude-code with correct brand label', () => {
     const def = getDefinition('claude-code')
     expect(def.label).toBe('Claude Code')
-    expect(def.shortLabel).toBe('CLAUDE:CODE')
-    expect(def.ui.brand.name).toBe('Claude Code')
+    expect(def.shortLabel).toBe('CLAUDE')
+    expect(def.ui.brand.name).toBe('Claude')
   })
 
   it('returns codex definition with approvals=false', () => {

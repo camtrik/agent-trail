@@ -1,11 +1,12 @@
 ---
 type: chore
 title: Restore Quality Checks And Pull Request CI
-status: todo
+status: wip
 priority: p1
 created: 2026-11-11
-branch:
-worktree:
+branch: chore/quality-check-baseline
+worktree: /Users/ebbi/.codex/worktrees/quality-baseline-implementation/agents-tracing-dashboard
+updated: 2026-11-11
 ---
 
 ## Description
