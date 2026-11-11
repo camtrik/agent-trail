@@ -23,5 +23,5 @@ worktree:
 
 ## Related
 
-- [热存储适配](openclaw-sqlite-storage.md)
+- [热存储适配](_done/v0.2.0/openclaw-sqlite-storage.md)
 - https://github.com/openclaw/openclaw/blob/v2026.11.3/src/state/openclaw-agent-schema.sql

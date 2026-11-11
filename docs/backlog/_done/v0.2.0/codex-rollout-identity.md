@@ -22,7 +22,7 @@ updated: 2026-11-11
 ## Related
 
 - https://github.com/camtrik/agent-trail/issues/1
-- [session-token-missing-subagent.md](session-token-missing-subagent.md)
+- [session-token-missing-subagent.md](../../session-token-missing-subagent.md)
 
 
 ## Notes

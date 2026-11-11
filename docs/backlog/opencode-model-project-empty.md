@@ -31,7 +31,7 @@ worktree:
 
 ## Acceptance criteria
 
-相关存储适配见 [OpenCode v2 schema](opencode-v2-schema.md)。本项的跨模型/项目归属与“新版会话完全不可见”属于不同问题，需要分别验收。
+相关存储适配见 [OpenCode v2 schema](_done/v0.2.0/opencode-v2-schema.md)。本项的跨模型/项目归属与“新版会话完全不可见”属于不同问题，需要分别验收。
 
 - [ ] OpenCode source 的 JSONL 中 model/project 字段被正确提取
 - [ ] Model 视图能展示 opencode 使用过的模型列表及其 token 消耗
