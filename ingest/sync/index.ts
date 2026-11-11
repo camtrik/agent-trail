@@ -20,7 +20,7 @@ import { logger } from '../logger';
 import { getCodexSessionMeta } from '../parser/codex-meta';
 import type { TokenUsage } from '@/types/trace';
 
-export const PARSER_CACHE_VERSION = 'parser-v13-local-timezone-rollups';
+export const PARSER_CACHE_VERSION = 'parser-v14-codex-rollout-identity';
 
 const claudeProjectPathCache = new Map<string, string | null>();
 
