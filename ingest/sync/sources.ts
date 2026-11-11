@@ -9,6 +9,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { inspectOpencodeSchema, listOpencodeSessions, openOpencodeReadonly } from '../parser/opencode-storage';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
@@ -269,8 +270,6 @@ export async function discoverCodexSources(dirs?: string[]): Promise<DiscoveredS
 // OpenCode Discovery
 // ============================================================================
 
-const OPENCODE_REQUIRED_TABLES = ['session', 'message', 'part', 'project'] as const;
-
 function resolveOpencodeDbPath(): string {
   const config = getConfig();
   const dirs = config.toolDirs.get('opencode') ?? [];
@@ -306,7 +305,7 @@ export async function discoverOpencodeSources(dirs?: string[]): Promise<Discover
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = openOpencodeReadonly(dbPath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to open database';
     logger.warn(`[sources] OpenCode DB locked or unreadable: ${dbPath}: ${msg}`);
@@ -314,22 +313,8 @@ export async function discoverOpencodeSources(dirs?: string[]): Promise<Discover
   }
 
   try {
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-      .all() as { name: string }[];
-    const existing = new Set(tables.map((r) => r.name));
-    const missing = OPENCODE_REQUIRED_TABLES.filter((t) => !existing.has(t));
-    if (missing.length > 0) {
-      return [{
-        type: 'opencode',
-        path: dbPath,
-        sessionCount: 0,
-        error: `Schema validation failed: missing tables [${missing.join(', ')}]`,
-      }];
-    }
-
-    const row = db.prepare('SELECT COUNT(*) as cnt FROM session').get() as { cnt: number };
-    return [{ type: 'opencode', path: dbPath, sessionCount: row.cnt }];
+    const schema = inspectOpencodeSchema(db);
+    return [{ type: 'opencode', path: dbPath, sessionCount: listOpencodeSessions(db, schema).length }];
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to query database';
     return [{ type: 'opencode', path: dbPath, sessionCount: 0, error: msg }];
