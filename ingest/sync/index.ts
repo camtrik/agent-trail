@@ -27,6 +27,9 @@ import {
   parseOpenClawSqliteSession, OPENCLAW_DATABASE_NAME,
 } from '../parser/openclaw-sqlite';
 
+import { backfillOpenClawRelationships } from './openclaw-lineage';
+import { backfillSourceRelationships, type SessionLineageEdge } from './session-lineage';
+
 export const PARSER_CACHE_VERSION = 'parser-v16-current-source-compatibility';
 
 const claudeProjectPathCache = new Map<string, string | null>();
@@ -1606,14 +1609,16 @@ export function writeSessionToDatabase(
       }
       const parentSessionId = parseResult.session.parentSessionId;
       const rootSessionId = parseResult.session.rootSessionId;
-      const hasCodexSession = (id: string | undefined) => id && database.prepare(
-        "SELECT 1 FROM sessions WHERE id = ? AND source = 'codex'"
-      ).get(id);
+      const source = parseResult.session.source;
+      const deferReferences = source === 'codex' || source === 'openclaw' || source === 'opencode';
+      const hasRelatedSession = (id: string | undefined) => id && database.prepare(
+        'SELECT 1 FROM sessions WHERE id = ? AND source = ?'
+      ).get(id, source);
       // Metadata may arrive before the parent's rollout. Keep its evidence in
-      // the sync relationship map and defer foreign keys until the parent exists.
-      const storedParentId = parseResult.session.source !== 'codex' || hasCodexSession(parentSessionId)
+      // source metadata and defer foreign keys until a same-source parent exists.
+      const storedParentId = !deferReferences || hasRelatedSession(parentSessionId)
         ? parentSessionId : undefined;
-      const storedRootId = parseResult.session.source !== 'codex' || hasCodexSession(rootSessionId)
+      const storedRootId = !deferReferences || hasRelatedSession(rootSessionId)
         ? rootSessionId : undefined;
       if (existing) {
         // Delete derived rows in dependency order before re-inserting
@@ -2994,6 +2999,10 @@ export async function syncPaths(
     }
   }
 
+  if (sourceType === 'openclaw') {
+    totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(), paths));
+  }
+
   upsertSyncStatus(sourceType, totalResult);
   sseManager.emit('sync_complete', {
     source: sourceType,
@@ -3057,6 +3066,8 @@ async function syncOpenClawSource(opts: SyncSourceOptions): Promise<SyncResult> 
   } catch (error) {
     totalResult.errors.push(`Failed to collect OpenClaw sessions: ${error}`);
   }
+  totalResult.errors.push(...await backfillOpenClawRelationships(getDatabase(),
+    sources.filter((source) => !source.error).map((source) => source.path)));
   sseManager.emit('sync_complete', { source: 'openclaw', sessionsInserted: totalResult.sessionsInserted,
     sessionsUpdated: totalResult.sessionsUpdated, errors: totalResult.errors.length });
   return totalResult;
@@ -3420,6 +3431,14 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
   try {
     const schema = inspectOpencodeSchema(ocDb);
     const sessionRows = listOpencodeSessions(ocDb, schema);
+    const relationships = new Map<string, SessionLineageEdge>();
+    for (const row of sessionRows) {
+      const parent = row.parent_id || row.fork_session_id;
+      relationships.set(`opencode:${row.id}`, {
+        hasParent: !!parent, parentId: parent ? `opencode:${parent}` : undefined,
+        kind: row.parent_id ? 'subagent' : row.fork_session_id ? 'fork' : 'root',
+      });
+    }
 
     if (totalResult.metrics) {
       totalResult.metrics.filesConsidered = sessionRows.length;
@@ -3487,6 +3506,7 @@ async function syncOpencodeSource(opts: SyncSourceOptions): Promise<SyncResult> 
         }
       }
     }
+    backfillSourceRelationships(database, 'opencode', relationships);
   } catch (err) {
     totalResult.errors.push(
       `Failed to query OpenCode sessions: ${err instanceof Error ? err.message : err}`
