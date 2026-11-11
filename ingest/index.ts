@@ -24,7 +24,6 @@ import { createSyncScheduler } from './src/sync-scheduler.js';
 import { sseManager } from './src/sse.js';
 import { logger } from './logger.js';
 import {
-  discoverOpenClawSources,
   discoverClaudeSources,
   discoverCodexSources,
   discoverCommandCodeSources,
@@ -230,13 +229,13 @@ async function initializeSourcesAndSync(): Promise<void> {
 
     // Discover source directories for watcher
     logger.info('Discovering source directories...');
-    const openClawSources = await discoverOpenClawSources();
     const claudeSources = await discoverClaudeSources();
     const codexSources = await discoverCodexSources();
     const commandcodeSources = await discoverCommandCodeSources();
 
     const sourceDirs = new Map<SyncSourceType, string[]>();
-    sourceDirs.set('openclaw', openClawSources.filter((s) => !s.error && s.path).map((s) => s.path));
+    // Watch agent roots so newly created SQLite databases and their WAL sidecars are discovered.
+    sourceDirs.set('openclaw', active.config.toolDirs.get('openclaw') ?? []);
     sourceDirs.set('claude-code', claudeSources.filter((s) => !s.error && s.path).map((s) => s.path));
     sourceDirs.set('commandcode', commandcodeSources.filter((s) => !s.error && s.path).map((s) => s.path));
     sourceDirs.set('codex', codexSources.filter((s) => !s.error && s.path).map((s) => s.path));

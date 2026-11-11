@@ -101,6 +101,24 @@ describe('watcher.start()', () => {
     await watcher.stop();
   }, 15000);
 
+  it('discovers new nested OpenClaw databases and coalesces their WAL sidecars', async () => {
+    const onPathsChanged = vi.fn();
+    const watcher = createWatcher(buildConfig({ onPathsChanged, debounceMs: 100 }));
+    try {
+      await watcher.start();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const dbPath = path.join(tempDir, 'new-agent', 'agent', 'openclaw-agent.sqlite');
+      await createFile(dbPath, 'database');
+      await createFile(dbPath + '-wal', 'wal');
+      await vi.waitFor(() => {
+        expect(onPathsChanged).toHaveBeenCalledWith('openclaw', [dbPath]);
+      }, { timeout: 4000, interval: 50 });
+      expect(onPathsChanged).toHaveBeenCalledTimes(1);
+    } finally {
+      await watcher.stop();
+    }
+  }, 10000);
+
   it('watches .json and .md files as well as .jsonl', async () => {
     const onSync = vi.fn();
     const watcher = createWatcher(buildConfig({
@@ -208,8 +226,9 @@ describe('temp file filtering', () => {
 
     await createFile(path.join(tempDir, 'valid.jsonl'), '{"test":1}\n');
 
-    await new Promise((r) => setTimeout(r, 800));
-    expect(onSync).toHaveBeenCalledWith('openclaw', [path.join(tempDir, 'valid.jsonl')]);
+    await vi.waitFor(() => {
+      expect(onSync).toHaveBeenCalledWith('openclaw', [path.join(tempDir, 'valid.jsonl')]);
+    }, { timeout: 4000, interval: 50 });
     await watcher.stop();
   }, 15000);
 });

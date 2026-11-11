@@ -57,37 +57,32 @@ export async function parseOpenClawSession(
   filePath: string,
   project: string
 ): Promise<ParseResult> {
+  const context = extractSessionContext(filePath, project);
+  if (!fs.existsSync(filePath)) {
+    const result = await parseOpenClawRecords([], context);
+    result.session.status = 'error';
+    result.errors.push({ line: 0, raw: filePath, error: 'File does not exist' });
+    return result;
+  }
+  const fileStream = fs.createReadStream(filePath);
+  const lines = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+  try {
+    return await parseOpenClawRecords(lines, context);
+  } finally {
+    lines.close();
+    fileStream.destroy();
+  }
+}
+
+/** Map exported JSONL or selected SQLite transcript payloads without writing private temp files. */
+export async function parseOpenClawRecords(
+  lines: AsyncIterable<string> | Iterable<string>,
+  context: SessionContext,
+): Promise<ParseResult> {
   const errors: ParseError[] = [];
   const warnings: string[] = [];
   const messages: TraceMessage[] = [];
   const activities: TraceActivity[] = [];
-
-  // Extract session context from file path
-  const context = extractSessionContext(filePath, project);
-
-  // Check if file exists
-  if (!fs.existsSync(filePath)) {
-    return {
-      session: createEmptySession(context),
-      messages: [],
-      activities: [],
-      errors: [
-        {
-          line: 0,
-          raw: filePath,
-          error: 'File does not exist',
-        },
-      ],
-      warnings: [],
-    };
-  }
-
-  // Parse JSONL line by line
-  const fileStream = fs.createReadStream(filePath);
-  const rl = readline.createInterface({
-    input: fileStream,
-    crlfDelay: Infinity,
-  });
 
   let ordinal = 0;
   let lineNum = 0;
@@ -97,7 +92,7 @@ export async function parseOpenClawSession(
   let sourceCostUsd: number | null = null;
   let hasToolCalls = false;
 
-  for await (const line of rl) {
+  for await (const line of lines) {
     lineNum++;
     if (!line.trim()) continue;
 
@@ -206,6 +201,7 @@ export async function parseOpenClawSession(
  * @returns SessionContext with extracted metadata
  */
 function extractSessionContext(filePath: string, project: string): SessionContext {
+  const fileMtime = fs.existsSync(filePath) ? fs.statSync(filePath).mtimeMs : 0;
   // Try to match agent session path pattern
   const match = filePath.match(/\/agents\/([^/]+)\/sessions\/([^/]+)\.jsonl/);
   if (match) {
@@ -215,7 +211,7 @@ function extractSessionContext(filePath: string, project: string): SessionContex
       uuid: match[2],
       project,
       filePath,
-      fileMtime: fs.statSync(filePath).mtimeMs,
+      fileMtime,
     };
   }
 
@@ -230,33 +226,7 @@ function extractSessionContext(filePath: string, project: string): SessionContex
     uuid,
     project,
     filePath,
-    fileMtime: fs.statSync(filePath).mtimeMs,
-  };
-}
-
-/**
- * Create an empty session for error cases
- */
-function createEmptySession(context: SessionContext): TraceSession {
-  return {
-    id: context.uuid,
-    source: 'openclaw',
-    project: context.project,
-    startedAt: null,
-    endedAt: null,
-    status: 'error',
-    rootSessionId: undefined,
-    parentSessionId: undefined,
-    relationshipType: undefined,
-    metrics: {
-      messageCount: 0,
-      userMessageCount: 0,
-      totalTokens: 0,
-      hasToolCalls: false,
-      parserMalformedLines: 0,
-      isTruncated: false,
-    },
-    turns: [],
+    fileMtime,
   };
 }
 
@@ -407,8 +377,8 @@ function parseMessage(
   if (typeof msg.content === 'string') {
     content = msg.content;
   } else if (Array.isArray(msg.content)) {
-    const textBlock = msg.content.find((block: ContentBlock) => block.type === 'text');
-    content = textBlock?.text || '';
+    content = msg.content.filter((block: ContentBlock) => block.type === 'text')
+      .map((block) => block.text || '').join('\n');
   }
 
   const sourceMetadata: SourceMetadata = {
@@ -457,7 +427,7 @@ function extractToolCalls(msg: OpenClawMessage, context: SessionContext, lineNum
           id: block.id || `${context.uuid}-${lineNum}-${toolCalls.length}`,
           name,
           category,
-          inputJson: JSON.stringify(block.input || {}),
+          inputJson: JSON.stringify(block.input ?? block.arguments ?? {}),
           resultEvents: [], // Tool results come from tool_result messages
           status: 'pending', // Will be updated when tool_result is parsed
         });
