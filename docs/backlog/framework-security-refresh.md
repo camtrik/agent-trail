@@ -23,3 +23,7 @@ updated: 2026-11-11
 
 - https://github.com/vercel/next.js/security/advisories/GHSA-pc58-hwjq-p385
 
+
+## Dependency audit
+
+2026-11-11：Next/React 更新后继续审计生产依赖，发现 33 条公告（5 high）。同步升级 Hono 4.13.17、node-server 2.1.6、ws 8.22.2，并刷新受影响的间接依赖；复查 0 条。Hono/node-server 选择已超过发布冷却期的修复版本，未保留 pnpm 自动添加的新版本冷却豁免。
