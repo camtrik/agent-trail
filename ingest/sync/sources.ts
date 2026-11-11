@@ -9,6 +9,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { listOpenClawSqliteSessions, OPENCLAW_DATABASE_NAME } from '../parser/openclaw-sqlite';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
@@ -176,11 +177,24 @@ async function discoverSingleOpenClawDir(agentsDir: string): Promise<DiscoveredS
     const agentDirs = await fs.readdir(agentsDir);
 
     for (const agentDir of agentDirs) {
+      const sqliteSessionIds = new Set<string>();
+      const dbPath = path.join(agentsDir, agentDir, 'agent', OPENCLAW_DATABASE_NAME);
+      if (fsSync.existsSync(dbPath)) {
+        try {
+          const sessions = await listOpenClawSqliteSessions(dbPath);
+          for (const session of sessions) sqliteSessionIds.add(session.id);
+          sources.push({ type: 'openclaw', path: dbPath, sessionCount: sessions.length });
+        } catch (error) {
+          sources.push({ type: 'openclaw', path: dbPath, sessionCount: 0,
+            error: error instanceof Error ? error.message : 'Unreadable OpenClaw SQLite database' });
+        }
+      }
       const sessionsPath = path.join(agentsDir, agentDir, 'sessions');
       try {
         await fs.access(sessionsPath);
         const files = await fs.readdir(sessionsPath);
-        const sessionFiles = files.filter((f) => f.endsWith('.jsonl'));
+        const sessionFiles = files.filter((f) => /\.jsonl(?:$|\.(?:deleted\.|reset\.|full\.bak$))/.test(f)
+          && !sqliteSessionIds.has(f.split('.jsonl')[0]));
         sources.push({ type: 'openclaw', path: sessionsPath, sessionCount: sessionFiles.length });
       } catch {
         // Agent has no sessions directory, skip

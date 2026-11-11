@@ -92,6 +92,7 @@ export interface ContentBlock {
   toolName?: string;
   id?: string;
   input?: unknown;
+  arguments?: unknown;
 }
 
 // ============================================================================

@@ -19,7 +19,12 @@ import { sseManager } from '../src/sse';
 import { logger } from '../logger';
 import type { TokenUsage } from '@/types/trace';
 
-export const PARSER_CACHE_VERSION = 'parser-v14-skip-api-request-blobs';
+import {
+  isOpenClawDatabasePath, openClawDatabasePathForChange, listOpenClawSqliteSessions,
+  parseOpenClawSqliteSession, OPENCLAW_DATABASE_NAME,
+} from '../parser/openclaw-sqlite';
+
+export const PARSER_CACHE_VERSION = 'parser-v15-openclaw-sqlite';
 
 const claudeProjectPathCache = new Map<string, string | null>();
 
@@ -2236,6 +2241,7 @@ export interface SyncSourceOptions {
 }
 
 interface SyncFileCandidate {
+  openClawSqlite?: { dbPath: string; sessionId: string };
   filePath: string;
   project: string;
   mtimeMs: number;
@@ -2269,6 +2275,14 @@ async function collectSessionFileCandidates(
 
   for (const source of sources) {
     if (source.error || source.sessionCount === 0) continue;
+    if (sourceType === 'openclaw' && isOpenClawDatabasePath(source.path)) {
+      for (const session of await listOpenClawSqliteSessions(source.path)) {
+        candidates.push({ filePath: `${source.path}#${session.id}`,
+          openClawSqlite: { dbPath: source.path, sessionId: session.id },
+          project: extractProjectFromPath(source.path, sourceType), mtimeMs: session.updatedAt });
+      }
+      continue;
+    }
 
     let files: string[];
     try {
@@ -2296,6 +2310,24 @@ async function collectSessionFileCandidates(
         project: extractProjectFromPath(filePath, sourceType),
         mtimeMs,
       });
+    }
+  }
+
+  if (sourceType === 'openclaw') {
+    // SQLite owns live sessions; do not re-import their JSONL exports or backups.
+    const priority = (candidate: SyncFileCandidate) => candidate.openClawSqlite ? 0
+      : candidate.filePath.endsWith('.jsonl') ? 1 : 2;
+    candidates.sort((left, right) => priority(left) - priority(right) || left.filePath.localeCompare(right.filePath));
+    const seen = new Set<string>();
+    for (let index = 0; index < candidates.length;) {
+      const candidate = candidates[index];
+      const id = candidate.openClawSqlite?.sessionId ?? path.basename(candidate.filePath).split('.jsonl')[0];
+      if (seen.has(id)) {
+        candidates.splice(index, 1);
+      } else {
+        seen.add(id);
+        index++;
+      }
     }
   }
 
@@ -2376,16 +2408,29 @@ async function collectPathFileCandidates(
   for (const rawPath of Array.from(new Set(paths))) {
     const filePath = path.resolve(rawPath);
     const fileName = path.basename(filePath);
+    const sqlitePath = sourceType === 'openclaw' ? openClawDatabasePathForChange(filePath) : undefined;
+    if (sqlitePath && fs.existsSync(sqlitePath) && (roots.length === 0 || roots.some((root) => isWithinRoot(sqlitePath, root)))) {
+      for (const session of await listOpenClawSqliteSessions(sqlitePath)) {
+        if (candidates.some((candidate) => candidate.openClawSqlite?.dbPath === sqlitePath && candidate.openClawSqlite.sessionId === session.id)) continue;
+        candidates.push({ filePath: `${sqlitePath}#${session.id}`,
+          openClawSqlite: { dbPath: sqlitePath, sessionId: session.id },
+          project: extractProjectFromPath(sqlitePath, sourceType), mtimeMs: session.updatedAt });
+      }
+      continue;
+    }
 
     if (!isSessionFileName(sourceType, fileName)) continue;
     if (roots.length > 0 && !roots.some((root) => isWithinRoot(filePath, root))) continue;
     if (!fs.existsSync(filePath)) continue;
 
-    candidates.push({
-      filePath,
-      project: extractProjectFromPath(filePath, sourceType),
-      mtimeMs: 0,
-    });
+    if (sourceType === 'openclaw') {
+      const siblingDb = path.join(path.dirname(path.dirname(filePath)), 'agent', OPENCLAW_DATABASE_NAME);
+      if (fs.existsSync(siblingDb)) {
+        const id = fileName.split('.jsonl')[0];
+        if ((await listOpenClawSqliteSessions(siblingDb)).some((session) => session.id === id)) continue;
+      }
+    }
+    candidates.push({ filePath, project: extractProjectFromPath(filePath, sourceType), mtimeMs: 0 });
   }
 
   return candidates.sort((a, b) => a.filePath.localeCompare(b.filePath));
@@ -2399,6 +2444,10 @@ async function parseAndWriteCandidate(
   relationshipsByChild: CodexRelationshipsByChild = new Map()
 ): Promise<void> {
   const filePath = candidate.filePath;
+  if (candidate.openClawSqlite) {
+    await syncOpenClawSqliteCandidate(candidate, opts, totalResult);
+    return;
+  }
   const snapshot = tryGetFileSnapshot(filePath);
   recordFileConsidered(totalResult, snapshot);
   opts.observer?.onFileStart?.(buildProgressEvent(sourceType, filePath, snapshot, totalResult, 0));
@@ -2856,52 +2905,49 @@ export async function syncPaths(
  * Uses discoverOpenClawSources() and parseOpenClawSession() from the parser module.
  * This is the original sync path preserved from Phase 2.
  */
+async function syncOpenClawSqliteCandidate(
+  candidate: SyncFileCandidate, opts: SyncSourceOptions, totalResult: SyncResult,
+): Promise<void> {
+  const { dbPath, sessionId } = candidate.openClawSqlite!;
+  const snapshot = tryGetFileSnapshot(dbPath);
+  recordFileConsidered(totalResult, snapshot);
+  opts.observer?.onFileStart?.(buildProgressEvent('openclaw', candidate.filePath, snapshot, totalResult, 0));
+  const { result, fingerprint } = await parseOpenClawSqliteSession(dbPath, sessionId, candidate.project);
+  recordFileParsed(totalResult, 'full');
+  result.session.name ||= extractSessionName(result);
+  const written = writeSessionToDatabase(result, undefined, candidate.filePath, {
+    force: opts.force, cacheFileHash: buildParserCacheHash('openclaw', fingerprint), sourceFileStatsPath: dbPath,
+  });
+  mergeSyncResult(totalResult, written);
+  if (result.session.metrics.isTruncated) {
+    totalResult.errors.push(`Partial OpenClaw session ${sessionId}: ${result.warnings.slice(-3).join('; ')}`);
+  }
+  opts.observer?.onFileComplete?.(buildProgressEvent('openclaw', candidate.filePath, snapshot, totalResult, snapshot?.size ?? 0));
+}
+
 async function syncOpenClawSource(opts: SyncSourceOptions): Promise<SyncResult> {
   const { discoverOpenClawSources } = await import('./sources');
-  const { parseOpenClawSession } = await import('../parser/openclaw');
-
   const { getConfig } = await import('../config');
-  const toolDirs = getConfig().toolDirs;
-  const dirs = opts.basePath ? [opts.basePath] : toolDirs.get('openclaw');
+  const dirs = opts.basePath ? [opts.basePath] : getConfig().toolDirs.get('openclaw');
   const sources = await discoverOpenClawSources(dirs);
   const totalResult = createSyncResult();
-
+  for (const source of sources) {
+    if (source.error) totalResult.errors.push(`OpenClaw source ${source.path}: ${source.error}`);
+  }
   try {
     const candidates = await collectSessionFileCandidates(sources, 'openclaw', opts);
-
     for (const candidate of candidates) {
-      const filePath = candidate.filePath;
-
       try {
-        const snapshot = tryGetFileSnapshot(filePath);
-        recordFileConsidered(totalResult, snapshot);
-        if (snapshot && shouldSkipBeforeParse('openclaw', filePath, snapshot, opts)) {
-          recordFileSkippedBeforeParse(totalResult);
-          continue;
-        }
-
-        const parseResult = await parseOpenClawSession(filePath, candidate.project);
-        recordFileParsed(totalResult);
-        parseResult.session.name = extractSessionName(parseResult);
-        parseResult.session.project = extractProjectFromParsedSession(parseResult, candidate.project);
-        parseResult.session.agentName = extractAgentNameFromPath(filePath, 'openclaw')
-        const result = writeSessionToDatabase(parseResult, undefined, filePath, { force: opts.force });
-        mergeSyncResult(totalResult, result);
-      } catch (err) {
-        totalResult.errors.push(`Failed to parse ${filePath}: ${err}`);
+        await parseAndWriteCandidate('openclaw', candidate, opts, totalResult);
+      } catch (error) {
+        totalResult.errors.push(`Failed to parse ${candidate.filePath}: ${error}`);
       }
     }
-  } catch (err) {
-    totalResult.errors.push(`Failed to collect OpenClaw session files: ${err}`);
+  } catch (error) {
+    totalResult.errors.push(`Failed to collect OpenClaw sessions: ${error}`);
   }
-
-  sseManager.emit('sync_complete', {
-    source: 'openclaw',
-    sessionsInserted: totalResult.sessionsInserted,
-    sessionsUpdated: totalResult.sessionsUpdated,
-    errors: totalResult.errors.length,
-  });
-
+  sseManager.emit('sync_complete', { source: 'openclaw', sessionsInserted: totalResult.sessionsInserted,
+    sessionsUpdated: totalResult.sessionsUpdated, errors: totalResult.errors.length });
   return totalResult;
 }
 
