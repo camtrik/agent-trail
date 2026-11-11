@@ -32,3 +32,12 @@ updated: 2026-11-11
 - sessions、overview aggregates/daily/model/project 共用请求成本；混合模型与每日归属按请求处理。来源成本（包括明确为零）优先，来源 partial 和缺 usage/model 的 partial 状态不丢失。
 - 新增阈值与缓存边界、两个小请求、模型切换、多日与重复快照、缺身份/usage/时间、来源零成本/partial、跨 provider token overlap 等回归。
 - 保留 PR #8 作者署名：B-Stewart <7998805+B-Stewart@users.noreply.github.com>。
+
+## 补充验证（Pricing Completeness）
+
+- 分支 `fix/pricing-completeness` 修复复审边界：CommandCode 等来源的逐请求 `sourceCostUsd` 按真实日期分配，先合并相同请求快照并核对来源会话总额，缺成本/日期或不一致时返回 unknown/partial。全时总览继续使用每个会话的来源总成本；没有逐条成本证据时，不再把按 token 比例估算的每日成本标为精确。
+- 无 usage 的 Claude 内容块独立保存请求 ID（JSON 仅含身份，不制造零 token）；同请求块不增加未知请求，独立缺失请求令已知成本保持 partial。turn assembler/API 会将身份与实际 usage 分开读取。
+- 完整来源零成本可推断所有已知模型成本为零；partial 零总成本不能推断模型完整成本。固定费率历史会话成本在汇总后再舍入。
+- 回归覆盖两天逐消息成本 1/0.01、相同请求重复快照、缺成本/缺日期、缺 usage 但总 token 恰好匹配、无 usage 身份持久化、完整/partial 零、多会话微额汇总。
+
+- 本轮验证：7 个相关测试文件共 148 项通过，frontend/ingest 两个 TypeScript 检查通过，修改相关 lint 无错误。全量 834 项通过、1 项跳过；另一个 OpenCode 混合布局首次同步测试暴露既有父子外键失败，交集成分支统一修复。

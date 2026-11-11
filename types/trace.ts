@@ -249,6 +249,8 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'tool_result';
  * Message within a turn
  */
 export interface TraceMessage {
+  /** Provider request identity, including content blocks without usage. */
+  requestId?: string;
   id: string;
   ordinal: number;
   role: MessageRole;

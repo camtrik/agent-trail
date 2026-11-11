@@ -186,7 +186,6 @@ function getDailyTokenCostRows(
   whereClause: string,
   params: SqlParam[],
 ): SessionCostRow[] {
-  const sessionTotalExpr = sessionTotalTokensExpr('s');
   const rows = db.prepare(`
     SELECT
       std.session_id AS id,
@@ -209,13 +208,7 @@ function getDailyTokenCostRows(
       COALESCE(std.cache_write_tokens, 0) AS cache_write_tokens,
       COALESCE(std.reasoning_tokens, 0) AS reasoning_tokens,
       COALESCE(std.total_tokens, 0) AS total_tokens,
-      CASE
-        WHEN s.source_cost_usd IS NOT NULL AND ${sessionTotalExpr} > 0
-          THEN s.source_cost_usd * COALESCE(std.total_tokens, 0) / ${sessionTotalExpr}
-        WHEN s.source_cost_usd IS NOT NULL
-          THEN s.source_cost_usd
-        ELSE NULL
-      END AS source_cost_usd,
+      s.source_cost_usd,
       CASE WHEN s.source_cost_usd IS NOT NULL THEN s.cost_pricing_status ELSE NULL END AS cost_pricing_status
     FROM session_token_daily std
     JOIN sessions s ON s.id = std.session_id
@@ -266,23 +259,13 @@ function expandSessionCostRows(
   return rows.flatMap<SessionCostRow>((row) => {
     let entries = costsBySession.get(row.id);
     if (!entries) {
-      entries = getSessionUsageCosts(db, row.id, { usageOnly: byModel && row.sourceCostUsd != null });
+      entries = getSessionUsageCosts(db, row.id, { reportedRequests: (daily || byModel) && row.sourceCostUsd != null });
       costsBySession.set(row.id, entries);
     }
-    if (row.sourceCostUsd != null) {
-      const knownModels = new Set(entries.map((entry) => entry.model).filter((model) => model != null));
-      const oneModel = knownModels.size === 1 && entries.every((entry) => entry.model != null);
-      if (!byModel || oneModel) {
-        // Only a single identified model can own an unsplit source total.
-        return [{ ...row, model: oneModel ? [...knownModels][0] : null,
-          costEstimate: { cost: row.sourceCostUsd,
-            pricingStatus: row.costPricingStatus === 'partial' ? 'partial' as const : 'priced' as const } }];
-      }
-      // Preserve known per-model tokens without inventing a split of a reported
-      // session cost. The total is used once by session/project/daily rollups.
-      return entries.map((entry) => ({ ...row, ...entry.usage, model: entry.model,
-        totalTokens: entry.totalTokens ?? Object.values(entry.usage).reduce((sum, value) => sum + value, 0),
-        sourceCostUsd: null, costEstimate: { cost: null, pricingStatus: 'unknown' as const } }));
+    if (row.sourceCostUsd != null && (!daily && (!byModel || entries[0]?.reportedModel))) {
+      return [{ ...row, model: byModel ? entries[0].reportedModel ?? null : entries[0]?.model ?? null,
+        costEstimate: { cost: row.sourceCostUsd,
+          pricingStatus: row.costPricingStatus === 'partial' ? 'partial' as const : 'priced' as const } }];
     }
     const selected = entries.filter((entry) => !daily || !entry.day || entry.day === row.day);
     if (selected.length === 0) {
@@ -293,11 +276,12 @@ function expandSessionCostRows(
     }
     return selected.map((entry) => {
       if (entry.aggregateFallback) {
-        return { ...row, model: entry.model, costEstimate: entry.estimate.cost === null
-          ? entry.estimate : estimateModelCost(entry.model, row) };
+        return { ...row, model: entry.model, costEstimate: row.sourceCostUsd != null || entry.estimate.cost === null
+          ? entry.estimate : estimateModelCost(entry.model, row, { round: false }) };
       }
       const usage = entry.usage;
-      const estimate = daily && !entry.day ? { cost: null, pricingStatus: 'unknown' as const } : entry.estimate;
+      const knownZero = row.sourceCostUsd === 0 && row.costPricingStatus !== 'partial';
+      const estimate = daily && !entry.day && !knownZero ? { cost: null, pricingStatus: 'unknown' as const } : entry.estimate;
       return { ...row, ...usage, model: entry.model,
         totalTokens: entry.totalTokens ?? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens + usage.reasoningTokens,
         costEstimate: estimate };
@@ -427,7 +411,9 @@ overviewRoutes.get('/api/v1/overview/aggregates', (c) => {
     total_tokens: number;
   };
 
-  const costSummary = rollUpSessionCosts(getDailyTokenCostRows(db, rollupWhereClause, rollupParams));
+  const costSummary = rollUpSessionCosts(window === 'all'
+    ? getSessionCostRows(db, whereClause, params)
+    : getDailyTokenCostRows(db, rollupWhereClause, rollupParams));
 
   return c.json({
     sessionCount: result.session_count,

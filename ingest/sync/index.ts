@@ -9,6 +9,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { encodeMessageUsage } from '../db/message-usage';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1788,7 +1789,7 @@ export function writeSessionToDatabase(
           message.turnId || null,
           typeof message.turnIndex === 'number' ? message.turnIndex : null,
           message.isRealUserInput ? 1 : 0,
-          message.tokenUsage ? JSON.stringify(message.tokenUsage) : '',
+          encodeMessageUsage(message),
           message.sourceMetadata.sourceFile,
           message.sourceMetadata.sourceLine || null
         );
@@ -2022,7 +2023,7 @@ export function appendSessionDeltaToDatabase(
           message.turnId || null,
           typeof message.turnIndex === 'number' ? message.turnIndex : null,
           message.isRealUserInput ? 1 : 0,
-          message.tokenUsage ? JSON.stringify(message.tokenUsage) : '',
+          encodeMessageUsage(message),
           message.sourceMetadata.sourceFile,
           message.sourceMetadata.sourceLine || null
         );
