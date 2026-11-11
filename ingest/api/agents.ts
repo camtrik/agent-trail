@@ -41,7 +41,7 @@ agentsRoutes.get('/api/v1/agents', (c) => {
     return c.json({ error: 'source query parameter is required' }, 400)
   }
 
-  if (!['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'].includes(source)) {
+  if (!['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'].includes(source)) {
     return c.json({ error: 'Invalid source parameter' }, 400)
   }
 

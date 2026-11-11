@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getDatabase } from '../db';
+import { isCommandCodeTranscript } from './sources';
 import { IncrementalParseDelta, ParseResult, TokenUsageAttribution } from '../parser/types';
 import { sseManager } from '../src/sse';
 import { logger } from '../logger';
@@ -65,7 +66,7 @@ export interface SyncObserver {
   onFileComplete?: (event: SyncProgressEvent) => void;
 }
 
-export type SyncSourceType = 'openclaw' | 'claude-code' | 'codex' | 'opencode' | 'qoder';
+export type SyncSourceType = 'openclaw' | 'claude-code' | 'codex' | 'commandcode' | 'opencode' | 'qoder';
 
 export interface FileSnapshotWithIdentity {
   size: number;
@@ -950,6 +951,14 @@ function buildParserCacheHash(source: string, fileHash: string): string {
   return `${PARSER_CACHE_VERSION}:${source}:${fileHash}`;
 }
 
+function commandCodeCacheHash(filePath: string): string {
+  const transcriptHash = computeFileHash(filePath);
+  const metadataPath = filePath.replace(/\.jsonl$/, '.meta.json');
+  let metadataHash = 'missing';
+  try { metadataHash = computeFileHash(metadataPath); } catch { /* Optional title sidecar. */ }
+  return buildParserCacheHash('commandcode', `${transcriptHash}:${metadataHash}`);
+}
+
 function hasCurrentParserCacheHash(sourceType: SyncSourceType, fileHash: string | null): boolean {
   return Boolean(fileHash?.startsWith(`${PARSER_CACHE_VERSION}:${sourceType}:`));
 }
@@ -1429,7 +1438,9 @@ function shouldSkipBeforeParse(
       existing &&
       existing.file_size === snapshot.size &&
       existing.file_mtime === snapshot.mtimeIso &&
-      hasCurrentParserCacheHash(sourceType, existing.file_hash)
+      (sourceType === 'commandcode'
+        ? existing.file_hash === commandCodeCacheHash(filePath)
+        : hasCurrentParserCacheHash(sourceType, existing.file_hash))
     );
   } catch {
     return false;
@@ -2299,6 +2310,7 @@ async function collectSessionFileCandidates(
       if (!isSessionFileName(sourceType, file)) continue;
 
       const filePath = path.join(source.path, file);
+      if (sourceType === 'commandcode' && !isCommandCodeTranscript(filePath)) continue;
       let mtimeMs = 0;
       if (opts.sortByMtimeDesc || typeof opts.limit === 'number') {
         try {
@@ -2354,6 +2366,8 @@ export async function syncSource(
     result = await syncOpenClawSource(opts);
   } else if (sourceType === 'claude-code') {
     result = await syncClaudeCodeSource(opts);
+  } else if (sourceType === 'commandcode') {
+    result = await syncCommandCodeSource(opts);
   } else if (sourceType === 'codex') {
     result = await syncCodexSource(opts);
   } else if (sourceType === 'opencode') {
@@ -2391,13 +2405,17 @@ async function collectPathFileCandidates(
   const roots = getConfig().toolDirs.get(sourceType) ?? [];
   const candidates: SyncFileCandidate[] = [];
 
-  for (const rawPath of Array.from(new Set(paths))) {
+  const transcriptPaths = sourceType === 'commandcode'
+    ? paths.map(filePath => filePath.replace(/\.meta\.json$/, '.jsonl'))
+    : paths;
+  for (const rawPath of Array.from(new Set(transcriptPaths))) {
     const filePath = path.resolve(rawPath);
     const fileName = path.basename(filePath);
 
     if (!isSessionFileName(sourceType, fileName)) continue;
     if (roots.length > 0 && !roots.some((root) => isWithinRoot(filePath, root))) continue;
     if (!fs.existsSync(filePath)) continue;
+    if (sourceType === 'commandcode' && !isCommandCodeTranscript(filePath)) continue;
 
     candidates.push({
       filePath,
@@ -2431,7 +2449,7 @@ async function parseAndWriteCandidate(
   }
 
   let fullReparseReason: string | null = null;
-  if (sourceType !== 'openclaw') {
+  if (sourceType !== 'openclaw' && sourceType !== 'commandcode') {
     const decision = decideCursorSync(sourceType, filePath, snapshot, opts);
     if (decision.type === 'skip_unchanged') {
       if (sourceType === 'codex') await recordCodexMetadataRelationship(filePath, relationshipsByChild);
@@ -2528,6 +2546,17 @@ async function parseFullCandidate(
       updateCursorAfterFullParse(database, sourceType, filePath, parseResult, fallbackReason);
     }
     mergeSyncResult(totalResult, writeResult);
+    return;
+  }
+
+  if (sourceType === 'commandcode') {
+    const { parseCommandCodeSession } = await import('../parser/commandcode');
+    const cacheFileHash = commandCodeCacheHash(filePath);
+    const parseResult = await parseCommandCodeSession(filePath, candidate.project);
+    recordFileParsed(totalResult, 'full');
+    parseResult.session.name = parseResult.session.name || extractSessionName(parseResult);
+    parseResult.session.project = extractProjectFromParsedSession(parseResult, candidate.project);
+    mergeSyncResult(totalResult, writeSessionToDatabase(parseResult, undefined, filePath, { force: opts.force, cacheFileHash }));
     return;
   }
 
@@ -3021,6 +3050,40 @@ async function syncClaudeCodeSource(opts: SyncSourceOptions): Promise<SyncResult
 
   sseManager.emit('sync_complete', {
     source: 'claude-code',
+    sessionsInserted: totalResult.sessionsInserted,
+    sessionsUpdated: totalResult.sessionsUpdated,
+    errors: totalResult.errors.length,
+  });
+
+  return totalResult;
+}
+
+async function syncCommandCodeSource(opts: SyncSourceOptions): Promise<SyncResult> {
+  const { discoverCommandCodeSources } = await import('./sources');
+
+  const { getConfig } = await import('../config');
+  const toolDirs = getConfig().toolDirs;
+  const sources = await discoverCommandCodeSources(toolDirs.get('commandcode'));
+  const totalResult = createSyncResult();
+
+  try {
+    const candidates = await collectSessionFileCandidates(sources, 'commandcode', opts);
+
+    for (const candidate of candidates) {
+      try {
+        await parseAndWriteCandidate('commandcode', candidate, opts, totalResult);
+      } catch (err) {
+        totalResult.errors.push(
+          `Failed to parse Command Code session ${candidate.filePath}: ${err}`
+        );
+      }
+    }
+  } catch (err) {
+    totalResult.errors.push(`Failed to collect Command Code session files: ${err}`);
+  }
+
+  sseManager.emit('sync_complete', {
+    source: 'commandcode',
     sessionsInserted: totalResult.sessionsInserted,
     sessionsUpdated: totalResult.sessionsUpdated,
     errors: totalResult.errors.length,

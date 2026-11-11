@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { fetchIngest, sanitizeError } from '@/lib/agent-tools/server-adapter'
 
-const SOURCE_TYPES = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as const
+const SOURCE_TYPES = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as const
 
 interface IngestSyncResult {
   type: string

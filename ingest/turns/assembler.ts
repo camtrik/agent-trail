@@ -467,6 +467,7 @@ function combineTokenUsage(messages: Array<TraceMessage | null | undefined>): To
       };
     }
 
+    if (usage.sourceCostUsd !== undefined) combined.sourceCostUsd = (combined.sourceCostUsd ?? 0) + usage.sourceCostUsd;
     combined.inputTokens += usage.inputTokens;
     combined.outputTokens += usage.outputTokens;
     combined.cacheReadTokens = (combined.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0);

@@ -267,6 +267,35 @@ export async function discoverCodexSources(dirs?: string[]): Promise<DiscoveredS
 }
 
 // ============================================================================
+/** Command Code hook telemetry and snapshots are not conversation transcripts. */
+export function isCommandCodeTranscript(filePath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fsSync.openSync(filePath, 'r');
+    const buffer = Buffer.alloc(65536);
+    const bytes = fsSync.readSync(fd, buffer, 0, buffer.length, 0);
+    const firstLine = buffer.subarray(0, bytes).toString('utf8').split('\n').find(line => line.trim());
+    if (!firstLine) return false;
+    const header = JSON.parse(firstLine);
+    return header.type === 'session' && typeof header.id === 'string';
+  } catch { return false; }
+  finally { if (fd !== undefined) fsSync.closeSync(fd); }
+}
+
+export async function discoverCommandCodeSources(dirs?: string[]): Promise<DiscoveredSource[]> {
+  const result: DiscoveredSource[] = [];
+  for (const root of dirs ?? getDefaultDirs('commandcode')) {
+    const discovered = await discoverJsonlDirectories('commandcode', root, 'Command Code projects directory not found');
+    for (const source of discovered) {
+      if (source.error) { result.push(source); continue; }
+      const entries = await fs.readdir(source.path);
+      const sessionCount = entries.filter(name => name.endsWith('.jsonl') && isCommandCodeTranscript(path.join(source.path, name))).length;
+      if (sessionCount > 0 || discovered.length === 1) result.push({ ...source, sessionCount });
+    }
+  }
+  return result;
+}
+
 // OpenCode Discovery
 // ============================================================================
 
@@ -406,6 +435,8 @@ export async function getSourceConfig(sourceType: TraceSource): Promise<SourceCo
     sources = await discoverOpenClawSources();
   } else if (sourceType === 'claude-code') {
     sources = await discoverClaudeSources();
+  } else if (sourceType === 'commandcode') {
+    sources = await discoverCommandCodeSources();
   } else if (sourceType === 'codex') {
     sources = await discoverCodexSources();
   } else if (sourceType === 'opencode') {

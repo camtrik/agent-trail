@@ -1316,14 +1316,14 @@ describe('overview endpoints', () => {
   // ==========================================================================
 
   describe('GET /api/v1/overview/capabilities', () => {
-    it('returns capabilities map with all 5 sources', async () => {
+    it('returns capabilities map with all 6 sources', async () => {
       const res = await app.request('/api/v1/overview/capabilities');
       expect(res.status).toBe(200);
       const body = await res.json();
 
       expect(body.capabilities).toBeDefined();
       expect(body.sources).toBeDefined();
-      expect(body.sources).toHaveLength(5);
+      expect(body.sources).toHaveLength(6);
       expect(body.sources).toContain('openclaw');
       expect(body.sources).toContain('claude-code');
       expect(body.sources).toContain('codex');

@@ -19,14 +19,14 @@ import {
 } from '@/ingest/config/tool-dirs';
 
 describe('TOOL_DIR_REGISTRY', () => {
-  it('should contain entries for all five source types', () => {
+  it('should contain entries for all six source types', () => {
     const types = TOOL_DIR_REGISTRY.map((d) => d.type);
     expect(types).toContain('openclaw');
     expect(types).toContain('claude-code');
     expect(types).toContain('codex');
     expect(types).toContain('opencode');
     expect(types).toContain('qoder');
-    expect(types).toHaveLength(5);
+    expect(types).toHaveLength(6);
   });
 
   it('should have envVar, configKey, and defaultDirs on every entry', () => {
