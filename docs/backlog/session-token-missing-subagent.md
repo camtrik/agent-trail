@@ -4,6 +4,7 @@ title: Session Token Count Missing Subagent Consumption
 status: todo
 priority: p1
 created: 2026-05-30
+updated: 2026-11-11
 branch:
 worktree:
 ---
@@ -26,3 +27,8 @@ Session 级别的 token 统计没有包含 subagent 消耗的 token。典型 ses
 - [ ] Session 总 token = 主 session token + 所有 subagent token 之和
 - [ ] 以 session `95672086-ce0f-476b-bbee-c02ea55e99a3` 验证：token 计数应明显高于当前值
 - [ ] 至少覆盖 OpenClaw source 的 subagent token 聚合（如其他 source 无 subagent 概念则不受影响）
+
+## Related
+
+- [Codex rollout 身份与血缘修复](codex-rollout-identity.md) 处理不同子 rollout 被写成父会话、独立 token 丢失的问题。父级界面展示含子会话总数仍由本项负责，不因身份修复而自动完成。
+- 父级含子聚合与各物理 session 自身用量应区分，避免全局汇总再次重复累计子代理消耗。

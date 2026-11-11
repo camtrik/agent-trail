@@ -4,6 +4,7 @@ title: OpenCode model and project views show no data despite token consumption
 status: todo
 priority: p1
 created: 2026-05-29
+updated: 2026-11-11
 branch:
 worktree:
 ---
@@ -29,6 +30,8 @@ worktree:
 发现时间：2026-05-29 01:16 AM
 
 ## Acceptance criteria
+
+相关存储适配见 [OpenCode v2 schema](opencode-v2-schema.md)。本项的跨模型/项目归属与“新版会话完全不可见”属于不同问题，需要分别验收。
 
 - [ ] OpenCode source 的 JSONL 中 model/project 字段被正确提取
 - [ ] Model 视图能展示 opencode 使用过的模型列表及其 token 消耗

@@ -18,6 +18,12 @@ worktree:
 - [ ] 可获得的当前脱敏 fixture 通过 parser/source 验证，必要时补 schema 能力诊断。
 - [ ] 不读取 machine_token.json、supabase_token、state.vscdb 或其他凭据存储。
 
+## Evidence
+
+2026-11-11 仅检查本机应用版本及允许读取的三张聊天表的列信息：安装的 Qoder 为 1.7.0，旧库仍为 chat_session/chat_record/chat_message。未读取消息正文、认证表或凭据文件。
+
+官方当日发布记录列出 IDE 1.39.2、CLI 1.1.86；本机旧库不能证明这两种当前产品的存储兼容性。保留 todo，后续需要当前版本的公开 schema 或脱敏 fixture；文档明确旧 IDE schema 的验证范围，不宣称新版 Desktop/CLI 已适配。
+
 ## Related
 
 - https://changelog.qoder.com/ide
