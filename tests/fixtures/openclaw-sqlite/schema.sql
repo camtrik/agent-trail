@@ -136,3 +136,20 @@ CREATE TABLE IF NOT EXISTS session_transcript_cold_archives (
   CHECK ((storage = 'file' AND archive_blob IS NULL) OR (storage = 'sqlite' AND archive_blob IS NOT NULL))
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS session_transcript_archives (
+  session_id TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('deleted', 'reset')),
+  encoding TEXT NOT NULL CHECK (encoding IN ('identity', 'zstd')),
+  archive_blob BLOB NOT NULL,
+  archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+  archive_name TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  published_at INTEGER,
+  publish_attempts INTEGER NOT NULL DEFAULT 0 CHECK (publish_attempts >= 0),
+  last_publish_attempt_at INTEGER,
+  last_publish_error TEXT,
+  PRIMARY KEY (session_id, generation),
+  CHECK (archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%')
+) STRICT;

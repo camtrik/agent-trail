@@ -226,8 +226,9 @@ describe('temp file filtering', () => {
 
     await createFile(path.join(tempDir, 'valid.jsonl'), '{"test":1}\n');
 
-    await new Promise((r) => setTimeout(r, 800));
-    expect(onSync).toHaveBeenCalledWith('openclaw', [path.join(tempDir, 'valid.jsonl')]);
+    await vi.waitFor(() => {
+      expect(onSync).toHaveBeenCalledWith('openclaw', [path.join(tempDir, 'valid.jsonl')]);
+    }, { timeout: 4000, interval: 50 });
     await watcher.stop();
   }, 15000);
 });

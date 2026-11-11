@@ -48,7 +48,8 @@ function toSourceResponse(s: DiscoveredSource) {
     lastSyncAt: s.lastSyncAt || null,
     error: s.error || null,
     // Source health status taxonomy per FOUND-05/DATA-03:
-    healthStatus: s.error ? 'error' : (s.sessionCount > 0 ? 'configured' : 'empty'),
+    healthStatus: s.error ? 'error' : s.warning ? 'parser-warning' : (s.sessionCount > 0 ? 'configured' : 'empty'),
+    ...(s.warning ? { warning: s.warning, unsupportedArchiveCount: s.unsupportedArchiveCount } : {}),
     watcherStatus,  // Phase 6: real-time watcher health
     filesWatched,   // Phase 6: files being monitored
   };

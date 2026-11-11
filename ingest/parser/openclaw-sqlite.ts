@@ -104,6 +104,19 @@ export async function listOpenClawSqliteSessions(dbPath: string): Promise<Array<
   ).all() as Array<{ id: string; updatedAt: number }>);
 }
 
+/** Count unsupported archive owners without reading their potentially large/private blob payloads. */
+export async function countOpenClawSqliteArchives(dbPath: string): Promise<number> {
+  return withOpenClawSnapshot(dbPath, (db) => {
+    let count = 0;
+    for (const table of ['session_transcript_cold_archives', 'session_transcript_archives']) {
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) {
+        count += (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+      }
+    }
+    return count;
+  });
+}
+
 function decodeEvent(row: EventRow): string {
   if (row.event_json !== null) return row.event_json;
   const bytes = row.event_utf8_bytes;

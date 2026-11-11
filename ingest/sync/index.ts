@@ -2933,6 +2933,7 @@ async function syncOpenClawSource(opts: SyncSourceOptions): Promise<SyncResult> 
   const totalResult = createSyncResult();
   for (const source of sources) {
     if (source.error) totalResult.errors.push(`OpenClaw source ${source.path}: ${source.error}`);
+    if (source.warning) totalResult.errors.push(`OpenClaw source warning ${source.path}: ${source.warning}`);
   }
   try {
     const candidates = await collectSessionFileCandidates(sources, 'openclaw', opts);

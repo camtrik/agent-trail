@@ -58,6 +58,12 @@ export async function parseOpenClawSession(
   project: string
 ): Promise<ParseResult> {
   const context = extractSessionContext(filePath, project);
+  if (!fs.existsSync(filePath)) {
+    const result = await parseOpenClawRecords([], context);
+    result.session.status = 'error';
+    result.errors.push({ line: 0, raw: filePath, error: 'File does not exist' });
+    return result;
+  }
   const fileStream = fs.createReadStream(filePath);
   const lines = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
   try {
@@ -195,6 +201,7 @@ export async function parseOpenClawRecords(
  * @returns SessionContext with extracted metadata
  */
 function extractSessionContext(filePath: string, project: string): SessionContext {
+  const fileMtime = fs.existsSync(filePath) ? fs.statSync(filePath).mtimeMs : 0;
   // Try to match agent session path pattern
   const match = filePath.match(/\/agents\/([^/]+)\/sessions\/([^/]+)\.jsonl/);
   if (match) {
@@ -204,7 +211,7 @@ function extractSessionContext(filePath: string, project: string): SessionContex
       uuid: match[2],
       project,
       filePath,
-      fileMtime: fs.statSync(filePath).mtimeMs,
+      fileMtime,
     };
   }
 
@@ -219,7 +226,7 @@ function extractSessionContext(filePath: string, project: string): SessionContex
     uuid,
     project,
     filePath,
-    fileMtime: fs.statSync(filePath).mtimeMs,
+    fileMtime,
   };
 }
 

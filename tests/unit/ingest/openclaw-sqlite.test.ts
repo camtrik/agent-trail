@@ -6,9 +6,12 @@ import { tmpdir } from 'node:os';
 import zlib from 'node:zlib';
 import { listOpenClawSqliteSessions, parseOpenClawSqliteSession, withOpenClawSnapshot } from '@/ingest/parser/openclaw-sqlite';
 import * as config from '@/ingest/config';
+import { parseOpenClawSession } from '@/ingest/parser/openclaw';
 import { closeDatabase, getDatabase, initSchema, openDatabase } from '@/ingest/db';
 import { syncPaths, syncSource } from '@/ingest/sync';
 import { discoverOpenClawSources } from '@/ingest/sync/sources';
+
+vi.mock('@/ingest/index', () => ({ getServiceContext: () => null }));
 
 const fixtureDir = join(process.cwd(), 'tests/fixtures/openclaw-sqlite');
 const events: Array<Record<string, unknown>> = JSON.parse(readFileSync(join(fixtureDir, 'transcript.json'), 'utf8'));
@@ -53,6 +56,13 @@ afterEach(() => {
 });
 
 describe('OpenClaw released SQLite transcript shape', () => {
+  it('preserves the legacy parser error result for a missing JSONL file', async () => {
+    const result = await parseOpenClawSession(join(directory, 'missing.jsonl'), 'example');
+    expect(result.session.status).toBe('error');
+    expect(result.messages).toEqual([]);
+    expect(result.errors).toMatchObject([{ line: 0, error: 'File does not exist' }]);
+  });
+
   it('discovers SQLite-only agents and decodes JSON/zstd events in seq order without changing the DB', async () => {
     for (const seq of [4, 2, 0, 3, 1]) insertEvent(seq, events[seq], seq === 4);
     const before = readFileSync(dbPath);
@@ -101,6 +111,18 @@ describe('OpenClaw released SQLite transcript shape', () => {
     expect(result.session.metrics.isTruncated).toBe(true);
     expect(result.warnings.join(' ')).toContain('length mismatch');
     expect(result.warnings.join(' ')).toContain('Cold transcript archive');
+  });
+
+  it('never treats a navigation-only cold row as a recoverable message body', async () => {
+    insertEvent(0, events[0]);
+    insertEvent(1, events[1], true);
+    // Simulate a reclaimed/cold payload; navigation metadata is deliberately retained.
+    writer.pragma('ignore_check_constraints = ON');
+    writer.prepare('UPDATE transcript_events SET event_json = NULL, event_zstd = NULL, event_utf8_bytes = NULL WHERE seq = 1').run();
+    const { result } = await parseOpenClawSqliteSession(dbPath, 'sqlite-session', 'fallback');
+    expect(result.messages).toEqual([]);
+    expect(result.session.metrics.isTruncated).toBe(true);
+    expect(result.warnings.join(' ')).toContain('Transcript body unavailable');
   });
 
   it('keeps compressed transcripts visibly partial when the runtime has no zstd decoder', async () => {
@@ -187,6 +209,27 @@ describe('OpenClaw released SQLite transcript shape', () => {
     const legacyChange = await syncPaths('openclaw', [join(sessionsDir, 'sqlite-session.jsonl')]);
     expect(legacyChange.sessionsUpdated).toBe(0);
     expect(db.prepare('SELECT total_tokens FROM sessions WHERE id = ?').get('sqlite-session')).toEqual({ total_tokens: 29 });
+  });
+
+  it('reports archive-only databases as partial support rather than an empty healthy source', async () => {
+    writer.exec("DELETE FROM session_windows; DELETE FROM session_nodes;");
+    writer.prepare(`INSERT INTO session_transcript_archives(session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,archive_name,created_at)
+      VALUES ('archived-only','gen-1','agent:example:old','reset','zstd',?,?, 'archived-only.jsonl.reset.1',1)`)
+      .run(Buffer.from('opaque archive body'), 'b'.repeat(64));
+    const discovered = await discoverOpenClawSources([agentsDir]);
+    expect(discovered[0]).toMatchObject({ sessionCount: 0, unsupportedArchiveCount: 1 });
+    expect(discovered[0].warning).toContain('only exported JSONL archives are supported');
+    vi.spyOn(config, 'getConfig').mockReturnValue({ ...config.loadConfig(), toolDirs: new Map([['openclaw', [agentsDir]]]) });
+    openDatabase({ path: join(directory, 'ingest.db') });
+    initSchema();
+    const result = await syncSource('openclaw');
+    expect(result.sessionsInserted).toBe(0);
+    expect(result.errors.join(' ')).toContain('1 OpenClaw SQLite archive payload(s)');
+    const { sourcesRoutes } = await import('@/ingest/api/sources');
+    const response = await sourcesRoutes.request('http://localhost/api/v1/sources/openclaw');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.sources[0]).toMatchObject({ sessionCount: 0, unsupportedArchiveCount: 1, healthStatus: 'parser-warning' });
   });
 
   it('reports schema incompatibility through full-source sync instead of silently skipping it', async () => {

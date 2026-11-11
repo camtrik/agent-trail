@@ -36,10 +36,10 @@ updated: 2026-11-11
 - SQLite 优先同 ID JSONL；保留独立 legacy 与 `.deleted.*` / `.reset.*` / `.full.bak` 归档。发现计数与数据库同步均去重。
 - 通过会话内容指纹跳过重复写入；watcher 观察 agent 根目录、新建数据库与 WAL/SHM 侧文件，按数据库范围刷新窗口。
 - 只读快照设置 300ms busy timeout，最多三次读取尝试，重试间隔 100ms；未知表/列报告版本化 schema 诊断。
-- 10 个相关套件共 107 tests passed；前端与 ingest 两项 typecheck 通过；新增模块及相关改动定向 ESLint 无问题。受工作区磁盘容量限制，本分支未重复运行 Next 构建，由主集成统一执行。
+- 10 个相关套件共 109 tests passed；补充缺失 JSONL graceful error 回归后，相关 21 tests passed；前端与 ingest 两项 typecheck 通过；新增模块及相关改动定向 ESLint 无问题。受工作区磁盘容量限制，本分支未重复运行 Next 构建，由主集成统一执行。
 
 ## 当前边界
 
-- 支持热 transcript 的 JSON 与 zstd、以及已导出的 JSONL 归档。`session_transcript_cold_archives` 检测后明确标记 partial，不用 navigation 投影伪造正文；独立 `session_transcript_archives` 中尚未导出为 JSONL 的归档暂未解码。
+- 支持热 transcript 的 JSON 与 zstd、以及已导出的 JSONL 归档。`session_transcript_cold_archives` 检测后明确标记 partial，不用 navigation 投影伪造正文；独立 `session_transcript_archives` 中尚未导出为 JSONL 的归档暂未解码。发现接口返回 archive owner 计数与 warning，source health 为 `parser-warning`，同步状态也记录该限制；只有 archive 行时不会被当成完全正常的空来源。
 - zstd 使用运行时能力检测；缺少解码能力的旧 Node 22 保留可读 JSON 事件并报告 partial 与版本提示，不改变现有 npm Node >=22 声明。
 - 当前数据库文件变化会检查该数据库内的窗口，尚未实现 SQL 增量游标；内容指纹保证同一窗口不因 WAL 或旧导出重复写入/计数。
