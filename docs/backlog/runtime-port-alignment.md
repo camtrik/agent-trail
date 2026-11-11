@@ -1,11 +1,12 @@
 ---
 type: fix
 title: Align Runtime Port Configuration
-status: todo
+status: review
 priority: p1
 created: 2026-11-11
-branch:
-worktree:
+branch: chore/compatibility-refresh
+worktree: /Users/ebbi/.codex/worktrees/compatibility-refresh/agents-tracing-dashboard
+updated: 2026-11-11
 ---
 
 ## Description
@@ -22,3 +23,7 @@ worktree:
 
 - https://github.com/camtrik/agent-trail/pull/6
 
+
+## Validation
+
+2026-11-11：相关 parser/config 测试 69 项通过，前端与 ingest 类型检查通过；等待集成验收。
