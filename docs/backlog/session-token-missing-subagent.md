@@ -30,5 +30,5 @@ Session 级别的 token 统计没有包含 subagent 消耗的 token。典型 ses
 
 ## Related
 
-- [Codex rollout 身份与血缘修复](codex-rollout-identity.md) 处理不同子 rollout 被写成父会话、独立 token 丢失的问题。父级界面展示含子会话总数仍由本项负责，不因身份修复而自动完成。
+- [Codex rollout 身份与血缘修复](_done/v0.2.0/codex-rollout-identity.md) 处理不同子 rollout 被写成父会话、独立 token 丢失的问题。父级界面展示含子会话总数仍由本项负责，不因身份修复而自动完成。
 - 父级含子聚合与各物理 session 自身用量应区分，避免全局汇总再次重复累计子代理消耗。

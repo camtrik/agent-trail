@@ -1,6 +1,6 @@
 # Runtime and data compatibility
 
-This records the implementation and verification scope of the 2026-11-11 maintenance batch. Unreleased main-branch changes do not update an existing v0.1.7 installation; build from source before a new release.
+This records the implementation and verification scope of the 2026-11-11 maintenance batch for v0.2.0. Existing v0.1.7 installations need an upgrade to receive these changes.
 
 ## Runtime
 

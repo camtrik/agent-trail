@@ -23,7 +23,7 @@ updated: 2026-11-11
 
 - https://github.com/camtrik/agent-trail/issues/2
 - https://github.com/camtrik/agent-trail/issues/3
-- [opencode-model-project-empty.md](opencode-model-project-empty.md)
+- [opencode-model-project-empty.md](../../opencode-model-project-empty.md)
 
 
 ## Notes
