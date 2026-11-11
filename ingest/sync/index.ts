@@ -30,7 +30,7 @@ import {
 import { backfillOpenClawRelationships } from './openclaw-lineage';
 import { backfillSourceRelationships, type SessionLineageEdge } from './session-lineage';
 
-export const PARSER_CACHE_VERSION = 'parser-v16-current-source-compatibility';
+export const PARSER_CACHE_VERSION = 'parser-v17-current-storage-request-identity';
 
 const claudeProjectPathCache = new Map<string, string | null>();
 
