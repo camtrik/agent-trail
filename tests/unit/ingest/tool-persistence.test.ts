@@ -41,14 +41,14 @@ function makeParseResult(overrides: {
   const sessionId = overrides.sessionId ?? 'test-session-001';
   const messageCount = overrides.messageCount ?? 2;
 
-  const messages = Array.from({ length: messageCount }, (_, i) => ({
+  const messages: ParseResult['messages'] = Array.from({ length: messageCount }, (_, i) => ({
     id: `${sessionId}:${i}`,
     ordinal: i,
-    role: (i === 0 ? 'user' : 'assistant') as any,
+    role: i === 0 ? 'user' : 'assistant',
     content: i === 0 ? 'Hello' : 'Hi there',
     timestamp: `2024-01-01T00:0${i}:00Z`,
     sourceMetadata: {
-      sourceType: 'claude-code' as any,
+      sourceType: 'claude-code',
       sourceFile: '/fake/session.jsonl',
       sourceLine: i + 1,
     },
@@ -72,10 +72,10 @@ function makeParseResult(overrides: {
     type: 'tool_call' as const,
     id: tc.id ?? `toolu_${i}`,
     name: tc.name ?? 'Bash',
-    category: (tc.category ?? 'Bash') as any,
+    category: tc.category ?? 'Bash',
     inputJson: tc.inputJson ?? '{}',
     resultEvents: tc.resultEvents ?? [],
-    status: (tc.status ?? 'pending') as any,
+    status: tc.status ?? 'pending',
     messageOrdinal: tc.messageOrdinal ?? 1,
     sourceLine: tc.sourceLine ?? 1,
     durationMs: tc.durationMs,
@@ -225,7 +225,7 @@ describe('tool persistence — writeSessionToDatabase', () => {
 
       const rows = db.prepare(
         'SELECT tool_id, name, category, input_json, status FROM tool_calls WHERE session_id = ?'
-      ).all(parseResult.session.id) as any[];
+      ).all(parseResult.session.id) as { tool_id: string; name: string; category: string; input_json: string; status: string }[];
 
       expect(rows.length).toBe(1);
       expect(rows[0].tool_id).toBe('toolu_abc123');
@@ -329,7 +329,7 @@ describe('tool persistence — writeSessionToDatabase', () => {
 
       const events = db.prepare(
         'SELECT content, is_partial, timestamp FROM tool_result_events WHERE tool_call_id = ? ORDER BY id'
-      ).all(tc.id) as any[];
+      ).all(tc.id) as { content: string; is_partial: number; timestamp: string }[];
 
       expect(events.length).toBe(2);
       expect(events[0].content).toBe('chunk1');
@@ -354,11 +354,12 @@ describe('tool persistence — writeSessionToDatabase', () => {
           id: 'toolu_structured',
           name: 'view_image',
           category: 'Other',
-          inputJson: { path: '/tmp/reference.webp' } as any,
+          // Exercise serialization of noncanonical runtime input at the storage boundary.
+          inputJson: { path: '/tmp/reference.webp' } as unknown as string,
           resultEvents: [
             {
               type: 'result_event',
-              content: structuredContent as any,
+              content: structuredContent as unknown as string,
               isPartial: false,
               timestamp: '2024-01-01T00:00:01Z',
             },
@@ -598,7 +599,7 @@ describe('tool persistence — writeSessionToDatabase', () => {
         content: 'I need to think about this...',
         isRedacted: false,
       };
-      pr.activities = [thinking as any];
+      pr.activities = [thinking];
 
       const result = writeSessionToDatabase(pr, db);
 

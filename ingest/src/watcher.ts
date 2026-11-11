@@ -211,7 +211,7 @@ export function createWatcher(config: WatcherConfig): WatcherInstance {
           });
 
           watcher.on('ready', () => {
-            const filesWatched = (watcher as any)._watched ? Object.keys((watcher as any)._watched).length : 0;
+            const filesWatched = Object.values(watcher.getWatched()).reduce((count, files) => count + files.length, 0);
             status.filesWatched += filesWatched;
             logger.debug(`[watcher] Ready on ${dir} — watching ${filesWatched} files`);
           });

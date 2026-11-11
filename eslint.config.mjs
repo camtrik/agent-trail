@@ -12,6 +12,13 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated packages, build output, isolated checkouts, and historical drafts.
+    "ingest/dist/**",
+    "npm-package/**",
+    ".worktree/**",
+    ".worktrees/**",
+    ".planning/**",
+    "coverage/**",
   ]),
 ]);
 

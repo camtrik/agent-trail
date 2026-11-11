@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSyncScheduler } from '@/ingest/src/sync-scheduler';
 import type { SyncResult } from '@/ingest/sync';
 
@@ -24,12 +24,17 @@ function result(overrides: Partial<SyncResult> = {}): SyncResult {
 }
 
 describe('sync observability', () => {
+  beforeEach(() => {
+    vi.stubEnv('AGENT_TRAIL_LOG_LEVEL', 'debug');
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('emits exactly one structured completion log for a successful run', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'debug').mockImplementation(() => {});
     const scheduler = createSyncScheduler({
       syncSource: vi.fn().mockResolvedValue(result()),
       syncPaths: vi.fn(),
@@ -51,7 +56,7 @@ describe('sync observability', () => {
   });
 
   it('emits exactly one structured completion log for a failed run', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'debug').mockImplementation(() => {});
     const scheduler = createSyncScheduler({
       syncSource: vi.fn().mockRejectedValue(new Error('boom')),
       syncPaths: vi.fn(),
@@ -67,7 +72,7 @@ describe('sync observability', () => {
   });
 
   it('exposes write counts and largest file bytes without raw content', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
     const scheduler = createSyncScheduler({
       syncSource: vi.fn().mockResolvedValue(result()),
       syncPaths: vi.fn(),

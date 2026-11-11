@@ -275,14 +275,14 @@ describe('sessions API', () => {
     it('filters by backend search and returns row enrichment fields', async () => {
       const db = getDatabase()
       insertTableSession(db, 'phase13-match', {
-        name: 'Wire indexed sessions table',
+        name: 'Wire backend search and activity sorting',
         gitBranch: 'feat/backend-filter',
         inputTokens: 1_000,
         outputTokens: 2_000,
       })
       insertTableSession(db, 'phase13-other', { name: 'Unrelated session' })
       insertUserMessage(db, 'phase13-match', 'Add backend search and activity sorting for the sessions table.')
-      insertUserMessage(db, 'phase13-other', 'Nothing to see here.', 'unknown-model')
+      insertUserMessage(db, 'phase13-other', 'Also mentions activity sorting only in the message body.', 'unknown-model')
       db.prepare(`
         INSERT INTO tool_calls (session_id, message_ordinal, tool_id, name, category, input_json, status)
         VALUES (?, ?, ?, ?, ?, ?, ?)

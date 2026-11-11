@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useHydrated } from '@/lib/use-hydrated'
 import { cn } from '@/lib/utils'
 
 // ============================================================================
@@ -52,11 +53,9 @@ export function SessionsFilterPanel({
   onClearAll,
 }: SessionsFilterPanelProps) {
   const [open, setOpen] = useState(false)
-  const [mounted, setMounted] = useState(false)
+  const mounted = useHydrated()
   const containerRef = useRef<HTMLDivElement>(null)
   const filtersActive = hasActiveFilters(state)
-
-  useEffect(() => { setMounted(true) }, [])
 
   useEffect(() => {
     if (!open) return

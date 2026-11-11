@@ -192,7 +192,7 @@ describe('turn assembler', () => {
 
       // Compact should have created a system event activity
       const compactActivity = firstTurn!.activities.find(
-        (a) => a.type === 'system' && (a as any).subtype === 'compact'
+        (a) => a.type === 'system' && a.subtype === 'compact'
       );
       expect(compactActivity).toBeDefined();
     });
@@ -200,7 +200,7 @@ describe('turn assembler', () => {
     it('should contain compact detection in assembler source', async () => {
       const fs = await import('fs');
       const assemblerSource = fs.readFileSync(
-        require('path').join(process.cwd(), 'ingest', 'turns', 'assembler.ts'),
+        join(process.cwd(), 'ingest', 'turns', 'assembler.ts'),
         'utf-8'
       );
       // acceptance_criteria: grep -c "compact" returns >= 2
@@ -230,7 +230,7 @@ describe('turn assembler', () => {
 
       // System message should appear as a system event activity
       const systemActivity = turn.activities.find(
-        (a) => a.type === 'system' && (a as any).subtype === 'system_message'
+        (a) => a.type === 'system' && a.subtype === 'system_message'
       );
       expect(systemActivity).toBeDefined();
     });
@@ -329,7 +329,7 @@ describe('turn assembler', () => {
       const toolCalls = firstTurn.activities.filter((a) => a.type === 'tool_call');
       expect(toolCalls.length).toBeGreaterThanOrEqual(1);
 
-      const tc = toolCalls[0] as any;
+      const tc = toolCalls[0];
       expect(tc.name).toBe('Read');
       expect(tc.status).toBe('success');
       expect(tc.messageOrdinal).toBe(1);
@@ -351,7 +351,7 @@ describe('turn assembler', () => {
       const toolCalls = turns[0].activities.filter((a) => a.type === 'tool_call');
       expect(toolCalls.length).toBeGreaterThanOrEqual(1);
 
-      const tc = toolCalls[0] as any;
+      const tc = toolCalls[0];
       expect(tc.status).toBe('error');
     });
 
@@ -399,7 +399,7 @@ describe('turn assembler', () => {
       const subagentLinks = firstTurn.activities.filter((a) => a.type === 'subagent_link');
       expect(subagentLinks.length).toBeGreaterThanOrEqual(1);
 
-      const link = subagentLinks[0] as any;
+      const link = subagentLinks[0];
       expect(link.subagentSessionId).toBe('child-session-1');
       expect(link.relationship).toBe('spawned');
     });
@@ -461,8 +461,8 @@ describe('turn assembler', () => {
       expect(turns[0].activities.some((activity) => activity.type === 'subagent_link')).toBe(false);
       const subagentLinks = turns[1].activities.filter((activity) => activity.type === 'subagent_link');
       expect(subagentLinks).toHaveLength(1);
-      expect((subagentLinks[0] as any).subagentSessionId).toBe('claude-agent:test-parent-agent-anchor:agent-123');
-      expect((subagentLinks[0] as any).messageOrdinal).toBe(3);
+      expect(subagentLinks[0].subagentSessionId).toBe('claude-agent:test-parent-agent-anchor:agent-123');
+      expect(subagentLinks[0].messageOrdinal).toBe(3);
     });
   });
 });

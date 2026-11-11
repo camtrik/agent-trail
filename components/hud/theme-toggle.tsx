@@ -1,16 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useHydrated } from '@/lib/use-hydrated'
 import { Moon, Sun } from 'lucide-react'
 import { useThemeStore } from '@/stores/theme-store'
 
 export function ThemeToggle() {
   const { setTheme, resolvedTheme } = useThemeStore()
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const mounted = useHydrated()
 
   if (!mounted) {
     return (
