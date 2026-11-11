@@ -320,6 +320,39 @@ describe('OpenCode v2 sync integration', () => {
     expect(db.prepare("SELECT content FROM messages WHERE session_id='opencode:v2-parent' AND role='assistant'").get()).toEqual({ content: 'Updated fixture reply\nInline suffix' });
   });
 
+  it('keeps missing-parent subagents/forks and repairs cached references when their parent arrives', async () => {
+    const f = track(createOpencodeV2TestDB());
+    getConfig().toolDirs.set('opencode', [f.dbPath]);
+    const source = new Database(f.dbPath);
+    source.pragma('foreign_keys = OFF');
+    source.exec("DELETE FROM session_message; DELETE FROM session_v2 WHERE id='v2-parent';");
+    const first = await syncSource('opencode');
+    expect(first.errors).toEqual([]);
+    expect(first.sessionsInserted).toBe(2);
+    const db = getDatabase();
+    expect(db.prepare("SELECT parent_session_id, root_session_id FROM sessions WHERE id='opencode:v2-child'").get())
+      .toEqual({ parent_session_id: null, root_session_id: null });
+    expect(db.prepare("SELECT parent_session_id, relationship_type FROM sessions WHERE id='opencode:v2-fork'").get())
+      .toEqual({ parent_session_id: null, relationship_type: 'fork' });
+    source.exec("INSERT INTO session_v2(id, time_created, time_updated) VALUES ('v2-parent',1,1)");
+    const second = await syncSource('opencode');
+    expect(second.errors).toEqual([]);
+    expect(second.sessionsInserted).toBe(1);
+    expect(second.metrics?.filesSkippedBeforeParse).toBe(2);
+    for (const id of ['opencode:v2-child', 'opencode:v2-fork']) {
+      expect(db.prepare('SELECT parent_session_id, root_session_id FROM sessions WHERE id=?').get(id))
+        .toEqual({ parent_session_id: 'opencode:v2-parent', root_session_id: 'opencode:v2-parent' });
+    }
+    db.prepare("UPDATE sessions SET parent_session_id=NULL,root_session_id=NULL WHERE source='opencode'").run();
+    const cached = await syncSource('opencode');
+    expect(cached.errors).toEqual([]);
+    expect(cached.metrics?.filesSkippedBeforeParse).toBe(3);
+    expect(db.prepare("SELECT parent_session_id FROM sessions WHERE id='opencode:v2-fork'").get())
+      .toEqual({ parent_session_id: 'opencode:v2-parent' });
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    source.close();
+  });
+
   it('refreshes an already ingested legacy session after v2 migration with unchanged timestamps', async () => {
     const f = track(createOpencodeTestDB([{ id: 'v2-parent', title: 'Old title' }]));
     process.env.OPENCODE_DB_PATH = f.dbPath;

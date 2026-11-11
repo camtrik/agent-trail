@@ -20,11 +20,11 @@ let agentsDir: string;
 let dbPath: string;
 let writer: Database.Database;
 
-function insertWindow(id = 'sqlite-session', key = 'agent:example:main', parentKey: string | null = null) {
+function insertWindow(id = 'sqlite-session', key = 'agent:example:main', parentKey: string | null = null, db = writer) {
   const time = Date.parse('2026-11-10T00:00:00Z');
-  writer.prepare(`INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, parent_session_key)
+  db.prepare(`INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, parent_session_key)
     VALUES (?, ?, ?, ?, ?)`).run(key, id, JSON.stringify({ sessionId: id, inputTokens: 9999, outputTokens: 9999, totalTokens: 19998 }), time, parentKey);
-  writer.prepare(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at, started_at, status, parent_session_key, display_name, model)
+  db.prepare(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at, started_at, status, parent_session_key, display_name, model)
     VALUES (?, ?, ?, ?, ?, 'running', ?, 'Example session', 'example-model')`).run(id, key, time, time, time, parentKey);
 }
 
@@ -240,6 +240,101 @@ describe('OpenClaw released SQLite transcript shape', () => {
     const result = await syncSource('openclaw');
     expect(result.sessionsInserted).toBe(0);
     expect(result.errors.join(' ')).toContain('Unsupported OpenClaw SQLite schema');
+  });
+
+
+  function startCanonical() {
+    vi.spyOn(config, 'getConfig').mockReturnValue({ ...config.loadConfig(), toolDirs: new Map([['openclaw', [agentsDir]]]) });
+    openDatabase({ path: join(directory, 'ingest.db') });
+    initSchema();
+    expect(getDatabase().pragma('foreign_keys', { simple: true })).toBe(1);
+  }
+  function assertLineage(id: string, parent: string | null, root: string | null, kind = 'subagent') {
+    expect(getDatabase().prepare('SELECT parent_session_id, root_session_id, relationship_type FROM sessions WHERE id = ?').get(id))
+      .toEqual({ parent_session_id: parent, root_session_id: root, relationship_type: kind });
+    expect(getDatabase().pragma('foreign_key_check')).toEqual([]);
+  }
+  function anotherAgent(name: string, id: string, key: string, parentKey: string | null) {
+    const file = join(agentsDir, name, 'agent', 'openclaw-agent.sqlite');
+    mkdirSync(join(agentsDir, name, 'agent'), { recursive: true });
+    const db = new Database(file);
+    try {
+      db.pragma('foreign_keys = OFF');
+      db.exec(readFileSync(join(fixtureDir, 'schema.sql'), 'utf8'));
+      insertWindow(id, key, parentKey, db);
+    } finally { db.close(); }
+    return file;
+  }
+
+  it('imports child-before-parent windows and backfills both FKs in the same full sync', async () => {
+    insertWindow('a-child', 'agent:example:child', 'agent:example:parent');
+    insertWindow('z-parent', 'agent:example:parent');
+    insertEvent(0, events[1], false, 'a-child');
+    startCanonical();
+    const result = await syncSource('openclaw');
+    expect(result.errors).toEqual([]);
+    expect(result.sessionsInserted).toBe(3);
+    assertLineage('a-child', 'z-parent', 'z-parent');
+    expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id='a-child'").get()).toEqual({ n: 1 });
+  });
+
+  it('keeps orphans and restores cached lineage when a parent window arrives later', async () => {
+    insertWindow('a-child', 'agent:example:child', 'agent:example:parent');
+    writer.prepare(`INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at)
+      VALUES ('agent:example:parent','z-parent','{}',1)`).run();
+    startCanonical();
+    expect((await syncSource('openclaw')).errors).toEqual([]);
+    assertLineage('a-child', null, null);
+    writer.prepare(`INSERT INTO session_windows(session_id,session_key,created_at,updated_at,status)
+      VALUES ('z-parent','agent:example:parent',1,1,'done')`).run();
+    const late = await syncPaths('openclaw', [dbPath + '-wal']);
+    expect(late.errors).toEqual([]);
+    expect(late.sessionsInserted).toBe(1);
+    expect(late.sessionsUpdated).toBe(0);
+    assertLineage('a-child', 'z-parent', 'z-parent');
+    getDatabase().prepare("UPDATE sessions SET parent_session_id=NULL,root_session_id=NULL WHERE id='a-child'").run();
+    const cached = await syncSource('openclaw');
+    expect(cached.errors).toEqual([]);
+    expect(cached.sessionsInserted + cached.sessionsUpdated).toBe(0);
+    assertLineage('a-child', 'z-parent', 'z-parent');
+  });
+
+  it('repairs a multilevel cross-agent chain when only each late ancestor DB is synced', async () => {
+    insertWindow('a-child', 'agent:example:child', 'agent:parent:main');
+    startCanonical();
+    expect((await syncSource('openclaw')).errors).toEqual([]);
+    assertLineage('a-child', null, null);
+    const parentDb = anotherAgent('parent', 'b-parent', 'agent:parent:main', 'agent:grand:main');
+    expect((await syncPaths('openclaw', [parentDb])).errors).toEqual([]);
+    assertLineage('a-child', 'b-parent', null);
+    assertLineage('b-parent', null, null);
+    const grandDb = anotherAgent('grand', 'z-grand', 'agent:grand:main', null);
+    expect((await syncPaths('openclaw', [grandDb])).errors).toEqual([]);
+    assertLineage('a-child', 'b-parent', 'z-grand');
+    assertLineage('b-parent', 'z-grand', 'z-grand');
+  });
+
+  it('resolves a fork through an already indexed legacy JSONL ancestor', async () => {
+    insertWindow('a-fork', 'agent:example:fork');
+    writer.prepare("UPDATE session_windows SET reason='fork',previous_session_id='legacy-parent' WHERE session_id='a-fork'").run();
+    const sessionsDir = join(agentsDir, 'example', 'sessions');
+    mkdirSync(sessionsDir);
+    writeFileSync(join(sessionsDir, 'legacy-parent.jsonl'), JSON.stringify(events[1]) + '\n');
+    startCanonical();
+    expect((await syncSource('openclaw')).errors).toEqual([]);
+    assertLineage('a-fork', 'legacy-parent', 'legacy-parent', 'fork');
+  });
+
+  it('defers fork references and never links an OpenClaw child to a different source', async () => {
+    insertWindow('a-fork', 'agent:example:fork');
+    writer.prepare("UPDATE session_windows SET reason='fork',previous_session_id='missing-parent' WHERE session_id='a-fork'").run();
+    startCanonical();
+    getDatabase().prepare(`INSERT INTO sessions(id,source,project,status,file_path)
+      VALUES ('missing-parent','codex','/other','idle','/other.jsonl')`).run();
+    expect((await syncSource('openclaw')).errors).toEqual([]);
+    assertLineage('a-fork', null, null, 'fork');
+    expect(getDatabase().prepare("SELECT source, parent_session_id FROM sessions WHERE id='missing-parent'").get())
+      .toEqual({ source: 'codex', parent_session_id: null });
   });
 
 });

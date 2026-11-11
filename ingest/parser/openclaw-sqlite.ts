@@ -47,7 +47,7 @@ interface WindowRow {
   entry_json: string | null;
 }
 
-interface NodeRow {
+export interface OpenClawNodeRow {
   session_key: string;
   current_session_id: string;
   parent_session_key: string | null;
@@ -117,6 +117,22 @@ export async function countOpenClawSqliteArchives(dbPath: string): Promise<numbe
   });
 }
 
+/** Read only lineage metadata; transcript decode and ingest cache hits cannot hide pending references. */
+export async function readOpenClawSqliteLineage(dbPath: string): Promise<{
+  nodes: OpenClawNodeRow[];
+  windows: Array<{ id: string; parentKey: string | null; previousId: string | null; reason: string | null }>;
+}> {
+  return withOpenClawSnapshot(dbPath, (db) => ({
+    nodes: db.prepare('SELECT session_key, current_session_id, parent_session_key FROM session_nodes').all() as OpenClawNodeRow[],
+    windows: db.prepare(`SELECT w.session_id AS id,
+      COALESCE(w.parent_session_key, n.parent_session_key) AS parentKey,
+      w.previous_session_id AS previousId, w.reason
+      FROM session_windows w LEFT JOIN session_nodes n ON n.session_key = w.session_key`).all() as Array<{
+        id: string; parentKey: string | null; previousId: string | null; reason: string | null;
+      }>,
+  }));
+}
+
 function decodeEvent(row: EventRow): string {
   if (row.event_json !== null) return row.event_json;
   const bytes = row.event_utf8_bytes;
@@ -168,7 +184,7 @@ export async function parseOpenClawSqliteSession(
       UNION
       SELECT n.session_key, n.current_session_id, n.parent_session_key
       FROM session_nodes n JOIN ancestors a ON n.session_key = a.parent_session_key
-    ) SELECT * FROM ancestors`).all(window.parent_session_key) as NodeRow[];
+    ) SELECT * FROM ancestors`).all(window.parent_session_key) as OpenClawNodeRow[];
     const events = db.prepare(`SELECT seq, event_json, event_zstd, event_utf8_bytes, created_at, navigation_json
       FROM transcript_events WHERE session_id = ? ORDER BY seq ASC`).all(sessionId) as EventRow[];
     const coldTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_transcript_cold_archives'").get();
@@ -225,12 +241,15 @@ export async function parseOpenClawSqliteSession(
     result.session.rootSessionId = parent.current_session_id;
     result.session.relationshipType = 'subagent';
     const visited = new Set([window.session_key]);
-    let ancestor: NodeRow | undefined = parent;
+    let ancestor: OpenClawNodeRow | undefined = parent;
     while (ancestor && !visited.has(ancestor.session_key)) {
       visited.add(ancestor.session_key);
       result.session.rootSessionId = ancestor.current_session_id;
       ancestor = ancestor.parent_session_key ? nodesByKey.get(ancestor.parent_session_key) : undefined;
     }
+  } else if (parentKey) {
+    // Another agent database may own this key; retain the kind until sync resolves its ID.
+    result.session.relationshipType = 'subagent';
   } else if (window.reason === 'fork' && window.previous_session_id) {
     result.session.parentSessionId = window.previous_session_id;
     result.session.rootSessionId = window.previous_session_id;
