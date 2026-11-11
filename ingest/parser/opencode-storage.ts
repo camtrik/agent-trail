@@ -96,7 +96,10 @@ export function listOpencodeSessions(
       `).all(...(sessionId ? [sessionId] : [])) as OpencodeSessionRow[];
       for (const row of rows) sessions.set(row.id, { ...row, storage_layout: layout });
     }
-    return [...sessions.values()].sort((a, b) => String(b.time_updated).localeCompare(String(a.time_updated)));
+    return [...sessions.values()].sort((a, b) =>
+      opencodeTimestampMillis(b.time_updated) - opencodeTimestampMillis(a.time_updated)
+      || a.id.localeCompare(b.id),
+    );
   });
 }
 
@@ -108,4 +111,14 @@ export function opencodeSessionFingerprint(db: Database.Database, row: StoredOpe
     const parts = partTable ? db.prepare(`SELECT COUNT(*) AS count, MAX(time_updated) AS updated FROM ${partTable} WHERE session_id = ?`).get(row.id) : null;
     return JSON.stringify([row, messages, parts]);
   });
+}
+
+function opencodeTimestampMillis(value: OpencodeSessionRow['time_updated']): number {
+  if (value == null || (typeof value === 'string' && !value.trim())) return 0;
+  const numeric = typeof value === 'number' || /^\d+(\.\d+)?$/.test(value.trim())
+    ? Number(value)
+    : null;
+  if (numeric != null && Number.isFinite(numeric)) return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+  const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
 }

@@ -40,6 +40,19 @@ describe('OpenCode v2 storage', () => {
     expect((await parseOpencodeSession(f.dbPath, 'old-only')).errors).toEqual([]);
   });
 
+  it('sorts numeric, numeric-string and ISO timestamps chronologically with stable ID ties', () => {
+    const f = fixture({ legacy: [
+      { id: 'old', timeUpdated: 9 },
+      { id: 'tie-b', timeUpdated: '10' },
+      { id: 'tie-a', timeUpdated: 10 },
+      { id: 'latest', timeUpdated: '1970-01-01T00:00:11.000Z' },
+    ] });
+    const db = openOpencodeReadonly(f.dbPath);
+    const rows = listOpencodeSessions(db, inspectOpencodeSchema(db));
+    expect(rows.filter(row => row.storage_layout === 'legacy').map(row => row.id)).toEqual(['latest', 'tie-a', 'tie-b', 'old']);
+    db.close();
+  });
+
   it('retains parent and fork relationships and treats explicit v2 zero totals as authoritative', async () => {
     const f = fixture();
     expect((await parseOpencodeSession(f.dbPath, 'v2-child')).session.parentSessionId).toBe('opencode:v2-parent');
