@@ -1,11 +1,12 @@
 ---
 type: docs
 title: Clarify Repository License Coverage
-status: todo
+status: review
 priority: p2
 created: 2026-11-11
-branch:
-worktree:
+branch: chore/compatibility-refresh
+worktree: /Users/ebbi/.codex/worktrees/compatibility-refresh/agents-tracing-dashboard
+updated: 2026-11-11
 ---
 
 ## Description
@@ -22,3 +23,7 @@ worktree:
 
 - https://github.com/camtrik/agent-trail/issues/5
 
+
+## Notes
+
+沿用现有 README、网站与 npm 包的 MIT 授权意图：补齐根 LICENSE 与源 package license。打包前要求显式许可证和正文，不再静默默认 MIT；三语言授权范围说明随兼容文档统一更新。
