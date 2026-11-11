@@ -160,17 +160,18 @@ describe('app/api/sync/route.ts', () => {
     vi.clearAllMocks()
   })
 
-  it('calls ingest sync for all 5 source types', async () => {
+  it('calls ingest sync for all 6 source types', async () => {
     const { POST } = await import('@/app/api/sync/route')
 
     const req = makeRequest('http://localhost/api/sync')
     await POST(req)
 
-    expect(fetchIngestMock).toHaveBeenCalledTimes(5)
+    expect(fetchIngestMock).toHaveBeenCalledTimes(6)
     const paths = fetchIngestMock.mock.calls.map((call) => call[0] as string)
     expect(paths).toContain('/api/v1/sources/openclaw/sync')
     expect(paths).toContain('/api/v1/sources/claude-code/sync')
     expect(paths).toContain('/api/v1/sources/codex/sync')
+    expect(paths).toContain('/api/v1/sources/commandcode/sync')
     expect(paths).toContain('/api/v1/sources/opencode/sync')
     expect(paths).toContain('/api/v1/sources/qoder/sync')
   })
@@ -181,7 +182,7 @@ describe('app/api/sync/route.ts', () => {
     const req = makeRequest('http://localhost/api/sync?force=true')
     await POST(req)
 
-    expect(fetchIngestMock).toHaveBeenCalledTimes(5)
+    expect(fetchIngestMock).toHaveBeenCalledTimes(6)
     for (const call of fetchIngestMock.mock.calls) {
       const [, opts] = call as [string, { body?: { force?: boolean } }]
       expect(opts?.body).toMatchObject({ force: true })
@@ -196,7 +197,7 @@ describe('app/api/sync/route.ts', () => {
 
     const body = await res.json() as Record<string, unknown>
     expect(Array.isArray(body.results)).toBe(true)
-    expect((body.results as unknown[]).length).toBe(5)
+    expect((body.results as unknown[]).length).toBe(6)
   })
 
   it('includes per-source error when one source sync fails, overall response is 200', async () => {
@@ -216,7 +217,7 @@ describe('app/api/sync/route.ts', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, unknown>
     const results = body.results as Array<Record<string, unknown>>
-    expect(results).toHaveLength(5)
+    expect(results).toHaveLength(6)
     // The failed source should have error and status='failed'
     const failed = results.find((r) => r.status === 'failed')
     expect(failed).toBeDefined()

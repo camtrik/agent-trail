@@ -45,7 +45,7 @@ afterAll(() => {
 describe('OpenCode migration v13 → current', () => {
   it('should apply current migrations cleanly on a fresh DB', () => {
     const version = db!.pragma('user_version', { simple: true }) as number;
-    expect(version).toBe(23);
+    expect(version).toBe(24);
 
     const tables = (db!.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"

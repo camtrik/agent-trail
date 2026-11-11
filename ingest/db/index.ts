@@ -146,10 +146,18 @@ export function runMigrations(): void {
   }
 
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
-  const targetVersion = 23;
+  const targetVersion = 24;
 
   if (currentVersion >= targetVersion) {
     logger.debug(`Schema at version ${currentVersion}, no migrations needed`);
+    return;
+  }
+
+  // v24 only widens source constraints. Rebuild using each existing table's
+  // definition so all columns, rows, indexes and triggers are preserved.
+  if (currentVersion === 23) {
+    widenCommandCodeSourceConstraints(db);
+    db.pragma(`user_version = ${targetVersion}`);
     return;
   }
 
@@ -753,8 +761,34 @@ export function runMigrations(): void {
     }
   }
 
+  widenCommandCodeSourceConstraints(db);
   db.pragma(`user_version = ${targetVersion}`);
   logger.info(`Migrations complete — schema at v${targetVersion}`);
+}
+
+function widenCommandCodeSourceConstraints(database: Database.Database): void {
+  const foreignKeys = database.pragma('foreign_keys', { simple: true });
+  database.pragma('foreign_keys = OFF');
+  try {
+    database.transaction(() => {
+      for (const table of ['sessions', 'subagent_links', 'session_token_daily', 'ingest_file_cursors']) {
+        const row = database.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table) as { sql: string } | undefined;
+        if (!row || row.sql.includes("'commandcode'")) continue;
+        const dependents = database.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index', 'trigger') AND tbl_name=? AND sql IS NOT NULL ORDER BY type, name").all(table) as Array<{ sql: string }>;
+        const createSql = row.sql.replace(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}_commandcode_new`)
+          .replace(/'codex'/g, "'codex', 'commandcode'");
+        database.exec(createSql);
+        database.exec(`INSERT INTO ${table}_commandcode_new SELECT * FROM ${table}`);
+        database.exec(`DROP TABLE ${table}`);
+        database.exec(`ALTER TABLE ${table}_commandcode_new RENAME TO ${table}`);
+        for (const dependent of dependents) database.exec(dependent.sql);
+      }
+      const violations = database.pragma('foreign_key_check');
+      if (Array.isArray(violations) && violations.length > 0) throw new Error('Command Code source migration would violate foreign keys');
+    })();
+  } finally {
+    database.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+  }
 }
 
 /**

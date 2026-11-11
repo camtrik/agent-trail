@@ -27,6 +27,7 @@ import {
   discoverOpenClawSources,
   discoverClaudeSources,
   discoverCodexSources,
+  discoverCommandCodeSources,
 } from './sync/sources.js';
 import type { ServiceContext, HealthStatus, StartupSyncState, VersionInfo } from './types.js';
 import type { TraceSource } from '../types/trace.js';
@@ -75,7 +76,7 @@ app.get('/version', (c) => {
   const version: VersionInfo = {
     version: '0.1.1',
     name: 'agent-trail-ingest',
-    sources: ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as TraceSource[],
+    sources: ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as TraceSource[],
   };
 
   return c.json(version);
@@ -232,10 +233,12 @@ async function initializeSourcesAndSync(): Promise<void> {
     const openClawSources = await discoverOpenClawSources();
     const claudeSources = await discoverClaudeSources();
     const codexSources = await discoverCodexSources();
+    const commandcodeSources = await discoverCommandCodeSources();
 
     const sourceDirs = new Map<SyncSourceType, string[]>();
     sourceDirs.set('openclaw', openClawSources.filter((s) => !s.error && s.path).map((s) => s.path));
     sourceDirs.set('claude-code', claudeSources.filter((s) => !s.error && s.path).map((s) => s.path));
+    sourceDirs.set('commandcode', commandcodeSources.filter((s) => !s.error && s.path).map((s) => s.path));
     sourceDirs.set('codex', codexSources.filter((s) => !s.error && s.path).map((s) => s.path));
 
     // Create watcher before warmup so routes can report it, but start it only
@@ -267,7 +270,7 @@ async function initializeSourcesAndSync(): Promise<void> {
 
     // Bounded startup warmup: parse a small latest-first slice before reporting
     // ready=true. Full historical indexing continues in the background below.
-    const sourceTypes = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as SyncSourceType[];
+    const sourceTypes = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as SyncSourceType[];
 
     if (active.config.startupSyncLimit > 0) {
       active.syncState.phase = 'warming';

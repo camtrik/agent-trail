@@ -25,7 +25,7 @@ import type {
 export const searchRoutes = new Hono();
 
 const SESSION_ID_RE = /^[a-zA-Z0-9:\-_.]{1,256}$/;
-const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'] as const;
+const VALID_SOURCES = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'] as const;
 
 interface MessageSearchRow {
   id: string;

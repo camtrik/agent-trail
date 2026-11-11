@@ -109,7 +109,7 @@ describe('ingest database migrations', () => {
     );
     expect(sessionIndexes.map((index) => index.name)).toContain('idx_sessions_source_started_at');
     expect(sessionIndexes.map((index) => index.name)).toContain('idx_sessions_source_agent_name');
-    expect(version).toBe(23);
+    expect(version).toBe(24);
   });
 
   it('initializes ingest file cursor schema idempotently', () => {
@@ -159,7 +159,7 @@ describe('ingest database migrations', () => {
     expect(sessionIndexes.map((index) => index.name)).toContain('idx_sessions_source_agent_name');
     expect(dailyTokenIndexes.map((index) => index.name)).toContain('idx_session_token_daily_source_date');
     expect(dailyTokenIndexes.map((index) => index.name)).toContain('idx_session_token_daily_project_date');
-    expect(version).toBe(23);
+    expect(version).toBe(24);
   });
 
   it('preserves existing OpenCode source cost fields when migrating from v20 to current', () => {
@@ -220,7 +220,7 @@ describe('ingest database migrations', () => {
     const version = dbRead.pragma('user_version', { simple: true });
     dbRead.close();
 
-    expect(version).toBe(23);
+    expect(version).toBe(24);
     expect(row.source_cost_usd).toBeCloseTo(1.23);
     expect(row.cost_source).toBe('source-reported');
     expect(row.cost_pricing_status).toBe('priced');
@@ -280,7 +280,7 @@ describe('ingest database migrations', () => {
     const version = dbRead.pragma('user_version', { simple: true });
     dbRead.close();
 
-    expect(version).toBe(23);
+    expect(version).toBe(24);
     expect(row.file_hash).toBeNull();
   });
 
@@ -368,7 +368,7 @@ describe('ingest database migrations', () => {
     const version = dbRead.pragma('user_version', { simple: true });
     dbRead.close();
 
-    expect(version).toBe(23);
+    expect(version).toBe(24);
     expect(rows).toEqual([
       {
         usage_date: '2026-05-15',
@@ -461,7 +461,7 @@ describe('ingest database migrations', () => {
     const version = dbRead.pragma('user_version', { simple: true });
     dbRead.close();
 
-    expect(version).toBe(23);
+    expect(version).toBe(24);
     expect(rows).toEqual([
       {
         id: 'claude:split-project',
@@ -595,7 +595,7 @@ describe('ingest database migrations', () => {
       `SELECT COUNT(*) as c FROM subagent_links WHERE session_id = 'codex:legacy-parent'`
     ).get() as { c: number };
 
-    expect(version).toBe(23);
+    expect(version).toBe(24);
     expect(sessionSql.sql).toContain("'qoder'");
     expect(linkSql.sql).toContain("'qoder'");
     expect(cursorSql.sql).toContain("'qoder'");
@@ -838,7 +838,7 @@ describe('ingest database migrations', () => {
     const version = dbRead.pragma('user_version', { simple: true });
     dbRead.close();
 
-    expect(version).toBe(23);
+    expect(version).toBe(24);
     // All three pre-existing rows survive the rebuild.
     const ids = sessionRows.map((r) => r.id);
     expect(ids).toEqual(

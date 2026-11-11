@@ -19,7 +19,7 @@
 /**
  * Supported agent sources
  */
-export type TraceSource = 'openclaw' | 'claude-code' | 'codex' | 'opencode' | 'qoder';
+export type TraceSource = 'openclaw' | 'claude-code' | 'codex' | 'commandcode' | 'opencode' | 'qoder';
 
 /**
  * Canonical display labels for trace sources.
@@ -29,6 +29,7 @@ export const SOURCE_LABELS: Record<TraceSource, string> = {
   openclaw: 'OpenClaw',
   'claude-code': 'Claude',
   codex: 'Codex',
+  commandcode: 'Command Code',
   opencode: 'OpenCode',
   qoder: 'Qoder',
 };
@@ -397,6 +398,8 @@ export interface TraceSystemEvent {
  * Token usage normalized across sources
  */
 export interface TokenUsage {
+  /** Persisted source estimate for this message/turn, when supplied. */
+  sourceCostUsd?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;

@@ -12,6 +12,7 @@ import type { TraceSource } from '@/types/trace';
 import {
   discoverClaudeSources,
   discoverCodexSources,
+  discoverCommandCodeSources,
   discoverOpenClawSources,
   discoverOpencodeSources,
   discoverQoderSources,
@@ -21,7 +22,7 @@ import { getServiceContext } from '../index.js';
 
 export const sourcesRoutes = new Hono();
 
-const SOURCE_TYPES: TraceSource[] = ['openclaw', 'claude-code', 'codex', 'opencode', 'qoder'];
+const SOURCE_TYPES: TraceSource[] = ['openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder'];
 
 function isTraceSource(type: string): type is TraceSource {
   return SOURCE_TYPES.includes(type as TraceSource);
@@ -30,6 +31,7 @@ function isTraceSource(type: string): type is TraceSource {
 async function discoverByType(type: TraceSource): Promise<DiscoveredSource[]> {
   if (type === 'openclaw') return discoverOpenClawSources();
   if (type === 'claude-code') return discoverClaudeSources();
+  if (type === 'commandcode') return discoverCommandCodeSources();
   if (type === 'codex') return discoverCodexSources();
   if (type === 'opencode') return discoverOpencodeSources();
   if (type === 'qoder') return discoverQoderSources();

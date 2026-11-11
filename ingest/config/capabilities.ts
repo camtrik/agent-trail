@@ -33,6 +33,14 @@ export const SOURCE_CAPABILITIES: Record<string, SourceCapabilities> = {
     sessions: true,
     replay: true,
   },
+  commandcode: {
+    agents: false,
+    automations: false,
+    cost: true,
+    activity: true,
+    sessions: true,
+    replay: true,
+  },
   codex: {
     agents: false,
     automations: true,

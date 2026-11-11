@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
 
   -- Source identification
-  source TEXT NOT NULL CHECK(source IN ('openclaw', 'claude-code', 'codex', 'opencode', 'qoder')),
+  source TEXT NOT NULL CHECK(source IN ('openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder')),
   project TEXT NOT NULL,
   name TEXT,
   agent_name TEXT,
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS subagent_links (
   -- Child session reference. The child row may not have been indexed yet, so this
   -- intentionally does not use a foreign key to sessions(id).
   subagent_session_id TEXT NOT NULL,
-  subagent_source TEXT NOT NULL CHECK(subagent_source IN ('openclaw', 'claude-code', 'codex', 'opencode', 'qoder')),
+  subagent_source TEXT NOT NULL CHECK(subagent_source IN ('openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder')),
   relationship TEXT NOT NULL CHECK(relationship IN ('spawned', 'attached')),
 
   -- Ordinal of the message/tool call that spawned or attached the child session.
@@ -261,7 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_turns_session_index ON turns(session_id, turn_ind
 -- fallback for sources that only expose aggregate usage.
 CREATE TABLE IF NOT EXISTS session_token_daily (
   session_id TEXT NOT NULL,
-  source TEXT NOT NULL CHECK(source IN ('openclaw', 'claude-code', 'codex', 'opencode', 'qoder')),
+  source TEXT NOT NULL CHECK(source IN ('openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder')),
   project TEXT NOT NULL,
   usage_date TEXT NOT NULL,
   attribution TEXT NOT NULL CHECK(attribution IN ('event', 'message', 'session')),
@@ -285,7 +285,7 @@ CREATE INDEX IF NOT EXISTS idx_session_token_daily_project_date
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS ingest_file_cursors (
-  source_type TEXT NOT NULL CHECK(source_type IN ('openclaw', 'claude-code', 'codex', 'opencode', 'qoder')),
+  source_type TEXT NOT NULL CHECK(source_type IN ('openclaw', 'claude-code', 'codex', 'commandcode', 'opencode', 'qoder')),
   file_path TEXT NOT NULL,
   session_id TEXT,
   file_size INTEGER NOT NULL,
