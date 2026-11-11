@@ -397,6 +397,8 @@ export interface TraceSystemEvent {
  * Token usage normalized across sources
  */
 export interface TokenUsage {
+  /** Provider request identity for deduplicating cumulative usage snapshots. */
+  requestId?: string;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
