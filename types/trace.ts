@@ -400,6 +400,8 @@ export interface TraceSystemEvent {
 export interface TokenUsage {
   /** Persisted source estimate for this message/turn, when supplied. */
   sourceCostUsd?: number;
+  /** Provider request identity for deduplicating cumulative usage snapshots. */
+  requestId?: string;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;

@@ -81,7 +81,7 @@ function coerceTokenCount(value: unknown): number {
     : 0;
 }
 
-function normalizeClaudeTokenUsage(usage?: ClaudeUsageRecord): TokenUsage | undefined {
+function normalizeClaudeTokenUsage(usage?: ClaudeUsageRecord, requestId?: string): TokenUsage | undefined {
   if (!usage) return undefined;
 
   const inputTokens = coerceTokenCount(usage.input_tokens);
@@ -97,6 +97,7 @@ function normalizeClaudeTokenUsage(usage?: ClaudeUsageRecord): TokenUsage | unde
     cacheWriteTokens,
     totalTokens,
     usageSemantics: 'additive',
+    ...(requestId ? { requestId } : {}),
   };
 }
 
@@ -1221,7 +1222,7 @@ function parseMessage(
     content,
     timestamp: parsed.timestamp,
     model: msg.model,
-    tokenUsage: normalizeClaudeTokenUsage(msg.usage),
+    tokenUsage: normalizeClaudeTokenUsage(msg.usage, msg.id),
     sourceMetadata,
   };
 }

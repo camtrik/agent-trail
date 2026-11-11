@@ -247,6 +247,7 @@ export interface ClaudeJsonlLine {
   parentUuid?: string; // Parent message UUID for DAG structure (D-01)
   type: string; // 'assistant', 'user', 'system', 'compact', etc.
   message?: {
+    id?: string;
     role: string;
     content:
       | string
