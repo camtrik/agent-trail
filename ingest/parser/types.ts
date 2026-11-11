@@ -148,6 +148,7 @@ export interface IncrementalParseOptions {
   currentModel?: string;
   knownToolCallIds?: string[];
   parserVersion: string;
+  codexPreviousTotalUsage?: TokenUsage;
 }
 
 export interface IncrementalParseDelta {
@@ -307,11 +308,46 @@ export interface ClaudeCompactBoundary {
  * Codex session files are JSONL format. Per D-06: Codex uses turn_context
  * boundaries natively. Per D-09: token_count used for streaming dedup.
  */
+export interface CodexPayload {
+  id?: string;
+  session_id?: string;
+  cwd?: string;
+  git_branch?: string;
+  gitBranch?: string;
+  model?: string;
+  type?: string;
+  turn_id?: string;
+  started_at?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+  input?: unknown;
+  input_text?: string;
+  text?: string;
+  output_text?: string;
+  output?: string;
+  content?: string | Array<Record<string, unknown>>;
+  role?: string;
+  status?: string;
+  token_count?: number;
+  message?: string;
+  info?: unknown;
+  new_thread_id?: string;
+  source?: {
+    subagent?: {
+      thread_spawn?: { parent_thread_id?: string };
+    };
+  } | string;
+  [key: string]: unknown;
+}
+
 export interface CodexJsonlLine {
   type: string; // 'session_meta', 'turn_context', 'response_item', 'event_msg', 'spawn_agent', etc.
-  payload?: any;
+  payload?: CodexPayload;
   session_meta?: {
-    session_id: string;
+    session_id?: string;
+    id?: string;
+    source?: CodexPayload['source'];
     cwd?: string;
     git_branch?: string;
     model?: string;
@@ -341,7 +377,7 @@ export interface CodexJsonlLine {
     type?: string; // 'spawned', 'attached'
   };
   timestamp?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 /**

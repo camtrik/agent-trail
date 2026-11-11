@@ -17,9 +17,10 @@ import { getDatabase } from '../db';
 import { IncrementalParseDelta, ParseResult, TokenUsageAttribution } from '../parser/types';
 import { sseManager } from '../src/sse';
 import { logger } from '../logger';
+import { getCodexSessionMeta } from '../parser/codex-meta';
 import type { TokenUsage } from '@/types/trace';
 
-export const PARSER_CACHE_VERSION = 'parser-v14-skip-api-request-blobs';
+export const PARSER_CACHE_VERSION = 'parser-v15-rollout-and-request-snapshots';
 
 const claudeProjectPathCache = new Map<string, string | null>();
 
@@ -1581,6 +1582,22 @@ export function writeSessionToDatabase(
     // Transactional write: all inserts/deletes in a single SQLite transaction
     // -------------------------------------------------------------------------
     const writeTransaction = database.transaction(() => {
+      if (parseResult.session.source === 'codex' && sourceFile) {
+        database.prepare(`
+          DELETE FROM sessions WHERE source = 'codex' AND file_path = ? AND id != ?
+        `).run(sourceFile, parseResult.session.id);
+      }
+      const parentSessionId = parseResult.session.parentSessionId;
+      const rootSessionId = parseResult.session.rootSessionId;
+      const hasCodexSession = (id: string | undefined) => id && database.prepare(
+        "SELECT 1 FROM sessions WHERE id = ? AND source = 'codex'"
+      ).get(id);
+      // Metadata may arrive before the parent's rollout. Keep its evidence in
+      // the sync relationship map and defer foreign keys until the parent exists.
+      const storedParentId = parseResult.session.source !== 'codex' || hasCodexSession(parentSessionId)
+        ? parentSessionId : undefined;
+      const storedRootId = parseResult.session.source !== 'codex' || hasCodexSession(rootSessionId)
+        ? rootSessionId : undefined;
       if (existing) {
         // Delete derived rows in dependency order before re-inserting
         // tool_result_events reference tool_calls, so delete events first.
@@ -1651,8 +1668,8 @@ export function writeSessionToDatabase(
           parseResult.session.metrics.terminationStatus || '',
           parseResult.session.name || '',
           parseResult.session.project,
-          parseResult.session.rootSessionId || null,
-          parseResult.session.parentSessionId || null,
+          storedRootId || null,
+          storedParentId || null,
           parseResult.session.relationshipType || 'root',
           parseResult.session.cwd || null,
           parseResult.session.gitBranch || null,
@@ -1692,8 +1709,8 @@ export function writeSessionToDatabase(
           parseResult.session.startedAt,
           parseResult.session.endedAt,
           parseResult.session.status,
-          parseResult.session.rootSessionId || null,
-          parseResult.session.parentSessionId || null,
+          storedRootId || null,
+          storedParentId || null,
           parseResult.session.relationshipType || 'root',
           parseResult.session.metrics.messageCount,
           parseResult.session.metrics.userMessageCount,
@@ -2248,6 +2265,7 @@ interface IncrementalParserContext {
   currentTurnId?: string;
   currentModel?: string;
   knownToolCallIds: string[];
+  codexPreviousTotalUsage?: TokenUsage;
 }
 
 function isSessionFileName(sourceType: SyncSourceType, fileName: string): boolean {
@@ -2404,6 +2422,7 @@ async function parseAndWriteCandidate(
   opts.observer?.onFileStart?.(buildProgressEvent(sourceType, filePath, snapshot, totalResult, 0));
 
   if (snapshot && shouldSkipBeforeParse(sourceType, filePath, snapshot, opts)) {
+    if (sourceType === 'codex') await recordCodexMetadataRelationship(filePath, relationshipsByChild);
     recordFileSkippedBeforeParse(totalResult);
     opts.observer?.onFileComplete?.(
       buildProgressEvent(sourceType, filePath, snapshot, totalResult, snapshot.size)
@@ -2415,6 +2434,7 @@ async function parseAndWriteCandidate(
   if (sourceType !== 'openclaw') {
     const decision = decideCursorSync(sourceType, filePath, snapshot, opts);
     if (decision.type === 'skip_unchanged') {
+      if (sourceType === 'codex') await recordCodexMetadataRelationship(filePath, relationshipsByChild);
       recordFileSkippedBeforeParse(totalResult);
       opts.observer?.onFileComplete?.(
         buildProgressEvent(sourceType, filePath, snapshot, totalResult, snapshot?.size ?? 0)
@@ -2590,6 +2610,7 @@ async function parseIncrementalAppendCandidate(
     currentModel: parserContext.currentModel,
     knownToolCallIds: parserContext.knownToolCallIds,
     parserVersion: PARSER_CACHE_VERSION,
+    codexPreviousTotalUsage: parserContext.codexPreviousTotalUsage,
   };
 
   const delta: IncrementalParseDelta = sourceType === 'claude-code'
@@ -2643,7 +2664,24 @@ function readIncrementalParserContext(cursor: IngestFileCursor): IncrementalPars
       WHERE session_id = ?
     `).all(cursor.sessionId) as { tool_id: string }[];
 
+    const session = cursor.sourceType === 'codex' ? database.prepare(`
+      SELECT total_input_tokens, total_output_tokens, total_cache_read_tokens,
+        total_cache_write_tokens, total_reasoning_tokens, total_tokens
+      FROM sessions WHERE id = ? AND source = 'codex'
+    `).get(cursor.sessionId) as {
+      total_input_tokens: number; total_output_tokens: number; total_cache_read_tokens: number;
+      total_cache_write_tokens: number; total_reasoning_tokens: number; total_tokens: number;
+    } | undefined : undefined;
+
     return {
+      codexPreviousTotalUsage: session ? {
+        inputTokens: session.total_input_tokens,
+        outputTokens: session.total_output_tokens,
+        cacheReadTokens: session.total_cache_read_tokens,
+        cacheWriteTokens: session.total_cache_write_tokens,
+        reasoningTokens: session.total_reasoning_tokens,
+        totalTokens: session.total_tokens,
+      } : undefined,
       currentTurnId: message?.turn_id || undefined,
       currentModel: message?.model || undefined,
       knownToolCallIds: toolRows.map((row) => row.tool_id).filter(Boolean),
@@ -2677,12 +2715,52 @@ function rememberCodexRelationship(
   });
 }
 
+async function recordCodexMetadataRelationship(
+  filePath: string,
+  relationships: CodexRelationshipsByChild
+): Promise<void> {
+  const stored = getDatabase().prepare(`
+    SELECT id, parent_session_id, root_session_id, relationship_type
+    FROM sessions WHERE source = 'codex' AND file_path = ? LIMIT 1
+  `).get(filePath) as {
+    id: string; parent_session_id: string | null;
+    root_session_id: string | null; relationship_type: string | null;
+  } | undefined;
+  if (stored?.parent_session_id) {
+    rememberCodexRelationship(relationships, stored.id, stored.parent_session_id, stored.root_session_id);
+    return;
+  }
+  // Only unresolved subagent metadata needs a header read on unchanged files.
+  if (stored?.relationship_type !== 'subagent') return;
+
+  const readline = await import('readline');
+  const stream = fs.createReadStream(filePath);
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      const parsed = JSON.parse(line);
+      if (parsed.type === 'session_meta') {
+        const meta = getCodexSessionMeta(parsed);
+        rememberCodexRelationship(relationships, meta?.session_id, meta?.parentSessionId);
+      }
+      break;
+    }
+  } catch {
+    // Header recovery is best-effort; full parsing reports malformed records.
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+}
+
 function recordCodexRelationshipsFromParseResult(
   parseResult: ParseResult,
   relationshipsByChild: CodexRelationshipsByChild
 ): void {
   const parentSessionId = parseResult.session.id;
   const rootSessionId = parseResult.session.rootSessionId || parentSessionId;
+  rememberCodexRelationship(relationshipsByChild, parentSessionId, parseResult.session.parentSessionId, rootSessionId);
 
   for (const activity of parseResult.activities) {
     if (activity.type !== 'subagent_link') continue;
@@ -2703,6 +2781,7 @@ function recordCodexRelationshipsFromDelta(
 ): void {
   const parentSessionId = delta.sessionId;
   const rootSessionId = delta.sessionPatch.rootSessionId || parentSessionId;
+  rememberCodexRelationship(relationshipsByChild, parentSessionId, delta.sessionPatch.parentSessionId, rootSessionId);
 
   for (const link of delta.subagentLinks) {
     if (link.subagentSource !== 'codex') continue;
@@ -2769,6 +2848,7 @@ function collectCodexRelationshipsFromStoredLinks(
   }>;
 
   for (const row of rows) {
+    if (row.child_session_id && relationshipsByChild.has(row.child_session_id)) continue;
     rememberCodexRelationship(
       relationshipsByChild,
       row.child_session_id,
@@ -2787,7 +2867,7 @@ function applyCodexRelationshipToSession(
   const relationship = relationshipsByChild.get(parseResult.session.id)
     ?? lookupCodexRelationshipFromDatabase(parseResult.session.id);
 
-  if (!relationship) return;
+  if (!relationship || parseResult.session.parentSessionId) return;
 
   parseResult.session.parentSessionId = relationship.parentSessionId;
   parseResult.session.rootSessionId = relationship.rootSessionId || relationship.parentSessionId;
@@ -3168,7 +3248,21 @@ export function backfillCodexRelationships(
       if (!childId || childId === rel.parentSessionId || !rel.parentSessionId) {
         continue;
       }
-      const result = stmt.run(rel.parentSessionId, rel.rootSessionId || rel.parentSessionId, childId);
+      const parent = database.prepare("SELECT 1 FROM sessions WHERE id = ? AND source = 'codex'").get(rel.parentSessionId);
+      if (!parent) continue;
+      let rootId = rel.rootSessionId || rel.parentSessionId;
+      const visited = new Set([childId]);
+      while (!visited.has(rootId)) {
+        visited.add(rootId);
+        const ancestor = relationships.get(rootId)?.parentSessionId
+          || (database.prepare("SELECT parent_session_id FROM sessions WHERE id = ? AND source = 'codex'").get(rootId) as { parent_session_id: string | null } | undefined)?.parent_session_id;
+        if (!ancestor || visited.has(ancestor)) break;
+        rootId = ancestor;
+      }
+      if (!database.prepare("SELECT 1 FROM sessions WHERE id = ? AND source = 'codex'").get(rootId)) {
+        rootId = rel.parentSessionId;
+      }
+      const result = stmt.run(rel.parentSessionId, rootId, childId);
       totalUpdated += result.changes;
     }
   });
@@ -3334,6 +3428,10 @@ export async function collectCodexRelationships(
           if (!line.trim()) continue;
           try {
             const parsed = JSON.parse(line);
+            if (parsed?.type === 'session_meta') {
+              const meta = getCodexSessionMeta(parsed);
+              rememberCodexRelationship(relationships, meta?.session_id, meta?.parentSessionId);
+            }
             const payload = parsed?.event_msg || parsed?.payload;
             if (
               parsed?.type === 'event_msg' &&
