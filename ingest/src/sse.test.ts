@@ -52,7 +52,7 @@ describe('createSSEManager', () => {
     ) => {
       const reader = stream.getReader();
       const decoder = new TextDecoder();
-      return reader.read().then(function process({ done, value }): any {
+      return reader.read().then(function process({ done, value }): Promise<void> | void {
         if (done) return;
         if (value) collector.push(decoder.decode(value));
         return reader.read().then(process);
@@ -99,7 +99,7 @@ describe('createSSEManager', () => {
     ) => {
       const reader = stream.getReader();
       const decoder = new TextDecoder();
-      return reader.read().then(function process({ done, value }): any {
+      return reader.read().then(function process({ done, value }): Promise<void> | void {
         if (done) return;
         if (value) collector.push(decoder.decode(value));
         return reader.read().then(process);
@@ -142,7 +142,7 @@ describe('createSSEManager', () => {
     ) => {
       const reader = stream.getReader();
       const decoder = new TextDecoder();
-      return reader.read().then(function process({ done, value }): any {
+      return reader.read().then(function process({ done, value }): Promise<void> | void {
         if (done) return;
         if (value) collector.push(decoder.decode(value));
         return reader.read().then(process);

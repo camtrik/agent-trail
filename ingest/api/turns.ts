@@ -168,7 +168,7 @@ turnsRoutes.get('/api/v1/sessions/:id/messages', (c) => {
     FROM messages
     WHERE session_id = ?
   `;
-  const params: any[] = [sessionId];
+  const params: unknown[] = [sessionId];
 
   if (role) {
     query += ' AND role = ?';
@@ -180,7 +180,7 @@ turnsRoutes.get('/api/v1/sessions/:id/messages', (c) => {
 
   // Get total count
   let countQuery = 'SELECT COUNT(*) as total FROM messages WHERE session_id = ?';
-  const countParams: any[] = [sessionId];
+  const countParams: unknown[] = [sessionId];
   if (role) {
     countQuery += ' AND role = ?';
     countParams.push(role);

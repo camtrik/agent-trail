@@ -219,6 +219,21 @@ export interface SessionContext {
 // ============================================================================
 
 /**
+ * Claude content blocks, including nested tool results.
+ */
+export interface ClaudeContentBlock {
+  type: string;
+  text?: string;
+  name?: string;
+  input?: unknown;
+  id?: string;
+  thinking?: string;
+  tool_use_id?: string;
+  content?: string | Array<string | { text?: string; [key: string]: unknown }>;
+  is_error?: boolean;
+}
+
+/**
  * Raw Claude Code JSONL line structure
  *
  * Claude Code session files are JSONL format where each line is a JSON object
@@ -234,19 +249,7 @@ export interface ClaudeJsonlLine {
     role: string;
     content:
       | string
-      | Array<{
-          type: string;
-          text?: string;
-          name?: string;
-          input?: any;
-          id?: string;
-          // thinking block fields (Claude extended thinking)
-          thinking?: string;
-          // tool_result block fields
-          tool_use_id?: string;
-          content?: string | Array<any>;
-          is_error?: boolean;
-        }>;
+      | ClaudeContentBlock[];
     model?: string;
     usage?: {
       input_tokens?: number;
@@ -263,7 +266,10 @@ export interface ClaudeJsonlLine {
     gitBranch?: string;
   };
   timestamp?: string;
-  [key: string]: any;
+  isCompactSummary?: boolean;
+  compact?: { truncatedUuids?: string[] };
+  truncatedUuids?: string[];
+  [key: string]: unknown;
 }
 
 /**
