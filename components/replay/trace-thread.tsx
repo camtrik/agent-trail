@@ -171,7 +171,7 @@ function TurnCard({
         <header className="v2-thead">
           <span className="v2-meta mono">
             {formatDuration(turn.durationMs)}{' '}
-            {'\u00b7'} {formatTokens(tokenIn)}\u2191/{formatTokens(tokenOut)}\u2193
+            {'\u00b7'} {formatTokens(tokenIn)}{'↑'}/{formatTokens(tokenOut)}{'↓'}
             {recordedUsage && turn.tokenUsage?.sourceCostUsd != null && <> {'\u00b7'} ${turn.tokenUsage.sourceCostUsd.toFixed(4)} source estimate</>}
             {recordedUsage && cacheRead > 0 && <> {'\u00b7'} cache read {formatTokens(cacheRead)} (included)</>}
             {recordedUsage && cacheWrite > 0 && <> {'\u00b7'} cache write {formatTokens(cacheWrite)} (included)</>}
